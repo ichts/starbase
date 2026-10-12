@@ -207,8 +207,10 @@ func (s *Server) stream(fn pageFunc) http.HandlerFunc {
 		sub := s.hub.Subscribe(sessionID(r), sig.TabID, r.URL.Path)
 		defer s.hub.Unsubscribe(sub)
 
+		// Brotli's default 4 MiB window costs 10 MiB of heap per open stream. 256 KiB (lgwin 18)
+		// costs 2.5 MiB and still spans a whole frame: the largest, /components/data-table, is 219 KB.
 		sse := datastar.NewSSE(w, r, datastar.WithCompression(
-			datastar.WithBrotli(datastar.WithBrotliLevel(5)),
+			datastar.WithBrotli(datastar.WithBrotliLevel(5), datastar.WithBrotliLGWin(18)),
 			datastar.WithGzip(),
 		))
 		var last uint64

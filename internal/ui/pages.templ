@@ -384,7 +384,8 @@ templ PixelBoard(v BoardView) {
 			<h2 id="board-title" class="section-title">Pixel Board</h2>
 			<span class="board-stats" aria-live="polite">
 				<span class="board-stats__dot" aria-hidden="true"></span>
-				{ itoa(v.Viewers) } watching · { itoa(int(v.Pixels)) } pixels painted
+				@BoardViewers(v.Viewers)
+				{ " watching · " + itoa(int(v.Pixels)) + " pixels painted" }
 			</span>
 		</header>
 		<div class="board-section__grid">
@@ -406,11 +407,17 @@ templ PixelBoard(v BoardView) {
 				@templ.Raw(boardGo)
 				<p>A single writer goroutine drains the command queue. Everyone's strokes that arrive together are applied in one SQLite transaction, each in its own savepoint, and committed once.</p>
 				<h3>3. Every tab re-renders the whole page</h3>
-				<p>After the commit, the hub wakes every open render stream. Each re-renders its page from a fresh read snapshot and sends the entire page again. The encoded board is cached per version, so a thousand viewers cost one query. Pages whose output didn't change send nothing.</p>
-				<p>Sending the whole page sounds wasteful until you look at the wire. The stream is compressed with Brotli, and the compressor keeps its window across frames. A full frame of this page is <strong>about 9.7 KB</strong>; the first one compresses to about 3.4 KB, and after a paint each complete re-render costs <strong>about 17 bytes</strong>. There is no diffing code anywhere: Datastar morphs the DOM, and compression takes care of the network.</p>
+				<p>After the commit, the writer tells the render loop what the batch touched, and a paint touches every page. In its next tick (at most one every 50 ms, however many strokes came in) the loop renders every open tab's page again from a fresh read snapshot, one read transaction per render worker, and sends the entire page again. The encoded board is cached per version, so a thousand viewers cost one query. Pages whose output didn't change send nothing.</p>
+				<p>Sending the whole page sounds wasteful until you look at the wire. The stream is compressed with zstd (Brotli in browsers without it), and the compressor keeps its window across frames. A full frame of this page is <strong>about 31 KB</strong>; the first one compresses to about 8 KB, and after a paint each complete re-render costs <strong>about 20 bytes</strong>. There is no diffing code anywhere: Datastar morphs the DOM, and compression takes care of the network.</p>
 				<h3>4. Presence</h3>
-				<p>"Watching" counts the open render streams on this page. The hub wakes the other viewers when someone joins or leaves, so the number is live too.</p>
+				<p>"Watching" counts the open render streams on this page. The number is a view of its own that every viewer shares: when someone joins or leaves, the render loop renders that one number again and sends it to everyone, instead of everyone's whole page.</p>
 			</div>
 		</details>
 	</section>
+}
+
+// BoardViewers is the Showcase's viewer count, which the server also sends
+// on its own when someone joins or leaves.
+templ BoardViewers(n int) {
+	<span id="board-viewers">{ itoa(n) }</span>
 }

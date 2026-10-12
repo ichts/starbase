@@ -12,21 +12,21 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/zweiundeins/lith/live"
 	"github.com/zweiundeins/lith/writer"
 
 	"starbase/internal/catalog"
 	"starbase/internal/config"
-	"starbase/internal/cqrs"
 	"starbase/internal/queries"
 	"starbase/internal/tscheck"
 )
 
 type Server struct {
-	ctx     context.Context // cancelled on shutdown; ends render streams
+	ctx     context.Context // cancelled on shutdown; ends the telemetry streams
 	cfg     config.Config
 	log     *slog.Logger
 	writer  *writer.Writer
-	hub     *cqrs.Hub
+	hub     *live.Hub
 	q       *queries.Queries
 	catalog *catalog.Catalog
 	content fs.FS
@@ -65,7 +65,7 @@ type Deps struct {
 	Config   config.Config
 	Log      *slog.Logger
 	Writer   *writer.Writer
-	Hub      *cqrs.Hub
+	Hub      *live.Hub
 	Queries  *queries.Queries
 	Catalog  *catalog.Catalog
 	StaticFS fs.FS
@@ -123,7 +123,7 @@ func (s *Server) Handler() http.Handler {
 	s.page(mux, "/themes", s.themesPage)
 	s.page(mux, "/contribute", s.contentPage("contribute", "contribute"))
 	s.page(mux, "/about", s.contentPage("about", "about"))
-	s.page(mux, "/showcase", s.showcasePage)
+	s.page(mux, "/showcase", s.showcasePage, s.boardViewers())
 	mux.Handle("GET /components", http.RedirectHandler("/", http.StatusMovedPermanently))
 	// The easiest way to contribute: a GitHub issue form, turned into a PR by a bot.
 	mux.HandleFunc("GET /submit", s.submit)

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/zweiundeins/lith/live"
 	"github.com/zweiundeins/lith/writer"
 
 	"starbase/components"
@@ -17,7 +18,6 @@ import (
 	"starbase/internal/catalog"
 	"starbase/internal/commands"
 	"starbase/internal/config"
-	"starbase/internal/cqrs"
 	"starbase/internal/db"
 	"starbase/internal/queries"
 	"starbase/internal/tscheck"
@@ -32,8 +32,9 @@ type App struct {
 	close   func()
 }
 
-// Close applies the commands still queued, stops the writer and closes the
-// database. Call it after the HTTP server has shut down.
+// Close ends the render streams, applies the commands still queued, stops
+// the writer and closes the database. Call it after the HTTP server has shut
+// down.
 func (a *App) Close() { a.close() }
 
 // Settle returns once the commands sent before it, such as the startup
@@ -51,7 +52,7 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error)
 	if err != nil {
 		return nil, err
 	}
-	hub := cqrs.NewHub()
+	hub := live.New(live.Options{Read: database.R, Log: log})
 	w, err := writer.New(database, writer.Options{OnCommit: hub.Changed, Log: log})
 	if err != nil {
 		database.Close()
@@ -60,7 +61,17 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error)
 	// The writer outlives the HTTP server, so in-flight commands can finish:
 	// Close applies what is queued.
 	go w.Run(context.Background())
+	hubCtx, stopHub := context.WithCancel(ctx)
+	hubDone := make(chan struct{})
+	go func() {
+		defer close(hubDone)
+		if err := hub.Run(hubCtx); err != nil {
+			log.Error("render loop", "err", err)
+		}
+	}()
 	closeAll := func() {
+		stopHub()
+		<-hubDone // its workers give their read connections back
 		if err := w.Close(); err != nil {
 			log.Warn("closing the writer", "err", err)
 		}

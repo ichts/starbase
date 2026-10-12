@@ -1,19 +1,25 @@
 package web
 
 import (
+	"bytes"
 	"context"
+	"database/sql"
 	"net/http"
 	"sync"
 	"time"
 
 	"github.com/starfederation/datastar-go/datastar"
+	"github.com/zweiundeins/lith/live"
+	"github.com/zweiundeins/lith/sse"
 
 	"starbase/internal/commands"
 	"starbase/internal/queries"
+	"starbase/internal/ui"
 )
 
 // boardCache shares the encoded board between all viewers of one version:
-// every stream re-renders after a paint, but only the first reads the cells.
+// every open page renders again after a paint, but only the first reads the
+// cells.
 type boardCache struct {
 	version int64
 	cells   string
@@ -35,6 +41,29 @@ func (s *Server) boardState(ctx context.Context, r *queries.Reader) (cells strin
 	s.board.Store(&boardCache{version: version, cells: cells})
 	return cells, pixels, nil
 }
+
+// boardViewersKey names the Showcase's "N watching", a view that every
+// stream on the page watches: a join or a leave renders that one small
+// view again, once for all viewers, and no one's page.
+const boardViewersKey = "showcase:viewers"
+
+func (s *Server) boardViewers() live.View {
+	return live.View{
+		Key:      boardViewersKey,
+		Presence: true,
+		Render: func(ctx context.Context, _ *sql.Tx) (any, error) {
+			var buf bytes.Buffer
+			if err := ui.BoardViewers(s.viewers()).Render(ctx, &buf); err != nil {
+				return nil, err
+			}
+			return sse.PatchElements(buf.Bytes()), nil
+		},
+	}
+}
+
+// viewers is the number of open streams on the Showcase, at least one: the
+// page being rendered, whose stream may not be open yet.
+func (s *Server) viewers() int { return max(1, s.hub.Count(boardViewersKey)) }
 
 // limiter is a per-session token bucket for painting: an edge concern that
 // protects the shared board from floods, not domain state.

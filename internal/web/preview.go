@@ -144,6 +144,15 @@ func (c *previewCache) submission(ctx context.Context, commit string) (bool, err
 	return ok, nil
 }
 
+// warmPreview fetches the preview a playground stream is about to render,
+// in the request's own goroutine: the render runs on a render worker, where
+// waiting for GitHub would hold up every page in the tick.
+func (s *Server) warmPreview(r *http.Request) {
+	if ref := r.URL.Query().Get("preview"); ref != "" && r.URL.Path == "/playground" {
+		s.previews.get(r.Context(), ref)
+	}
+}
+
 // get returns the component <slug> at <commit>, from "<commit>/<slug>".
 func (c *previewCache) get(ctx context.Context, ref string) (*preview, error) {
 	commit, slug, ok := strings.Cut(ref, "/")

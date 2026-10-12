@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
-	"hash/fnv"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -14,7 +14,10 @@ import (
 
 	"github.com/a-h/templ"
 	"github.com/starfederation/datastar-go/datastar"
+	"github.com/zweiundeins/lith/live"
+	"github.com/zweiundeins/lith/sse"
 
+	"starbase/internal/commands"
 	"starbase/internal/model"
 	"starbase/internal/queries"
 	"starbase/internal/ui"
@@ -54,33 +57,32 @@ var errNotFound = errors.New("not found")
 var tabIDRe = regexp.MustCompile(`^[a-z0-9]{8,32}$`)
 
 // page registers GET (document) and POST (render stream) for a pattern.
-func (s *Server) page(mux *http.ServeMux, pattern string, fn pageFunc) {
+// The page's streams also watch shared: views that all its viewers share,
+// such as the Showcase's viewer count.
+func (s *Server) page(mux *http.ServeMux, pattern string, fn pageFunc, shared ...live.View) {
 	mux.HandleFunc("GET "+pattern, s.document(fn))
-	mux.HandleFunc("POST "+pattern, s.stream(fn))
+	mux.HandleFunc("POST "+pattern, s.stream(fn, shared))
 }
 
-// load runs one render against a fresh read snapshot.
-func (s *Server) load(ctx context.Context, req *http.Request, tabID string, fn pageFunc) (v view, user *model.User, err error) {
+// load renders a page in rd's snapshot: the document's own read
+// transaction, or a render worker's.
+func (s *Server) load(ctx context.Context, rd *queries.Reader, req *http.Request, tabID string, fn pageFunc) (v view, user *model.User, err error) {
 	sid := sessionID(req)
-	err = s.q.View(ctx, func(r *queries.Reader) error {
-		var err error
-		if user, err = r.SessionUser(ctx, sid); err != nil {
-			return err
-		}
-		prefs, err := r.Prefs(ctx, sid)
-		if err != nil {
-			return err
-		}
-		tab, ok, err := r.Tab(ctx, sid, tabID)
-		if err != nil {
-			return err
-		}
-		if !ok { // a new page: its URL, and the session's default sort
-			tab = model.TabState{Browse: model.BrowseFromQuery(req.URL.Query(), prefs.DefaultSort())}
-		}
-		v, err = fn(&renderCtx{ctx: ctx, r: r, req: req, sid: sid, tabID: tabID, user: user, tab: tab, prefs: prefs})
-		return err
-	})
+	if user, err = rd.SessionUser(ctx, sid); err != nil {
+		return v, nil, err
+	}
+	prefs, err := rd.Prefs(ctx, sid)
+	if err != nil {
+		return v, nil, err
+	}
+	tab, ok, err := rd.Tab(ctx, sid, tabID)
+	if err != nil {
+		return v, nil, err
+	}
+	if !ok { // a new page: its URL, and the session's default sort
+		tab = model.TabState{Browse: model.BrowseFromQuery(req.URL.Query(), prefs.DefaultSort())}
+	}
+	v, err = fn(&renderCtx{ctx: ctx, r: rd, req: req, sid: sid, tabID: tabID, user: user, tab: tab, prefs: prefs})
 	return v, user, err
 }
 
@@ -163,7 +165,12 @@ func (s *Server) loginURL(next string) string {
 
 func (s *Server) document(fn pageFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		v, user, err := s.load(r.Context(), r, "", fn)
+		var v view
+		var user *model.User
+		err := s.q.View(r.Context(), func(rd *queries.Reader) (err error) {
+			v, user, err = s.load(r.Context(), rd, r, "", fn)
+			return err
+		})
 		if errors.Is(err, errNotFound) {
 			s.notFound(w, r)
 			return
@@ -183,11 +190,12 @@ func (s *Server) document(fn pageFunc) http.HandlerFunc {
 	}
 }
 
-// stream is the read side of CQRS for one tab: it renders the page, then
-// waits for the hub to signal a commit that concerns this tab, and renders
-// again. Every frame is the whole #app; Datastar morphs the difference and
-// Brotli, sharing one window across frames, makes resending cheap.
-func (s *Server) stream(fn pageFunc) http.HandlerFunc {
+// stream is the read side of CQRS for one tab: a view of its own in the
+// render loop (lith/live), rendered again in the next tick after a commit
+// touches the tab's session, the tab, or everything. Every frame is the
+// whole #app; Datastar morphs the difference, and the stream's compressor
+// (lith/sse), keeping its window across frames, makes resending cheap.
+func (s *Server) stream(fn pageFunc, shared []live.View) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var sig struct {
 			TabID string `json:"tabid"`
@@ -204,48 +212,44 @@ func (s *Server) stream(fn pageFunc) http.HandlerFunc {
 				datastar.WithSelector("body"), datastar.WithModeAppend())
 			return
 		}
-		sub := s.hub.Subscribe(sessionID(r), sig.TabID, r.URL.Path)
-		defer s.hub.Unsubscribe(sub)
-
-		// Brotli's default 4 MiB window costs 10 MiB of heap per open stream. 256 KiB (lgwin 18)
-		// costs 2.5 MiB and still spans a whole frame: the largest, /components/data-table, is 219 KB.
-		sse := datastar.NewSSE(w, r, datastar.WithCompression(
-			datastar.WithBrotli(datastar.WithBrotliLevel(5), datastar.WithBrotliLGWin(18)),
-			datastar.WithGzip(),
-		))
-		var last uint64
-		var buf bytes.Buffer
-		for {
-			v, user, err := s.load(r.Context(), r, sig.TabID, fn)
-			if err != nil {
-				if r.Context().Err() == nil {
-					s.log.Error("stream render", "path", r.URL.Path, "err", err)
-				}
-				return
-			}
-			buf.Reset()
-			sh := s.shell(r, user, v)
-			if err := ui.App(sh, v.Body(sh)).Render(r.Context(), &buf); err != nil {
-				return
-			}
-			// Skip frames identical to the last one sent.
-			h := fnv.New64a()
-			h.Write(buf.Bytes())
-			if sum := h.Sum64(); sum != last {
-				last = sum
-				if err := sse.PatchElements(buf.String()); err != nil {
-					return
-				}
-			}
-			select {
-			case <-sub.C:
-			case <-r.Context().Done():
-				return
-			case <-s.ctx.Done():
-				return
-			}
+		s.warmPreview(r)
+		// The view renders on a render worker, also after this request has
+		// ended: it keeps the request's values, not its cancellation.
+		req := r.Clone(context.WithoutCancel(r.Context()))
+		sid := sessionID(r)
+		tab := live.View{
+			Key:    "tab:" + sig.TabID,
+			Topics: []string{commands.SessionTopic(sid), commands.TabTopic(sig.TabID), commands.TopicAll},
+			Render: func(ctx context.Context, tx *sql.Tx) (any, error) {
+				return s.frame(ctx, queries.Read(tx), req, sig.TabID, fn)
+			},
+		}
+		err := s.hub.Serve(w, r, live.Spec{ID: sig.TabID, Views: append([]live.View{tab}, shared...)})
+		switch {
+		case errors.Is(err, live.ErrFull):
+			s.log.Warn("render stream refused: too many open", "path", r.URL.Path)
+		case err != nil && !errors.Is(err, live.ErrStopped):
+			s.log.Debug("render stream ended", "path", r.URL.Path, "err", err)
 		}
 	}
+}
+
+// frame renders a tab's #app as a patch. A page that is gone (a component
+// a deploy removed) renders the not-found page, as its document would.
+func (s *Server) frame(ctx context.Context, rd *queries.Reader, req *http.Request, tabID string, fn pageFunc) ([]byte, error) {
+	v, user, err := s.load(ctx, rd, req, tabID, fn)
+	if errors.Is(err, errNotFound) {
+		v, user, err = s.load(ctx, rd, req, tabID, notFoundPage)
+	}
+	if err != nil {
+		return nil, err
+	}
+	var buf bytes.Buffer
+	sh := s.shell(req, user, v)
+	if err := ui.App(sh, v.Body(sh)).Render(ctx, &buf); err != nil {
+		return nil, err
+	}
+	return sse.PatchElements(buf.Bytes()), nil
 }
 
 func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error) {
@@ -258,13 +262,15 @@ func (s *Server) notFound(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	s.document(func(rc *renderCtx) (view, error) {
-		return view{
-			Title:  "Lost in space · Starbase",
-			Body:   func(ui.Shell) templ.Component { return ui.NotFound() },
-			Status: http.StatusNotFound,
-		}, nil
-	})(w, r)
+	s.document(notFoundPage)(w, r)
+}
+
+func notFoundPage(*renderCtx) (view, error) {
+	return view{
+		Title:  "Lost in space · Starbase",
+		Body:   func(ui.Shell) templ.Component { return ui.NotFound() },
+		Status: http.StatusNotFound,
+	}, nil
 }
 
 // pageSignals adds the dev boot id (used for live reload) to a page's signals.

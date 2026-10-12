@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/andybalholm/brotli"
+	"github.com/zweiundeins/lith/live"
 	"github.com/zweiundeins/lith/writer"
 
 	"starbase/components"
@@ -27,7 +28,6 @@ import (
 	"starbase/internal/catalog"
 	"starbase/internal/commands"
 	"starbase/internal/config"
-	"starbase/internal/cqrs"
 	"starbase/internal/db"
 	"starbase/internal/queries"
 	"starbase/internal/tscheck"
@@ -56,7 +56,10 @@ func newServerWriter(t *testing.T) (*httptest.Server, *http.Client, *writer.Writ
 	if err != nil {
 		t.Fatal(err)
 	}
-	hub := cqrs.NewHub()
+	hub := live.New(live.Options{Read: d.R, Log: log})
+	hubDone := make(chan struct{})
+	go func() { hub.Run(ctx); close(hubDone) }()
+	t.Cleanup(func() { cancel(); <-hubDone })
 	wr, err := writer.New(d, writer.Options{OnCommit: hub.Changed, Log: log})
 	if err != nil {
 		t.Fatal(err)

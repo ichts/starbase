@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/starfederation/datastar-go/datastar"
+	"github.com/zweiundeins/lith/edge"
 
 	"starbase/internal/commands"
 	"starbase/internal/tscheck"
@@ -36,7 +37,7 @@ func (s *Server) playgroundCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now()
-	if !s.checkLimit.allow(sessionID(r), 1, now) || !s.checkLimitIP.allow(clientIP(r), 1, now) {
+	if !s.checkLimit.allow(sessionID(r), 1, now) || !s.checkLimitIP.allow(edge.ClientKey(r), 1, now) {
 		http.Error(w, "checking too often", http.StatusTooManyRequests)
 		return
 	}

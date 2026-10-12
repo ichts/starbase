@@ -276,7 +276,7 @@ func (s *Server) demoRowsExport(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	now := time.Now()
-	if !s.exportLimit.allow(sessionID(r), 1, now) || !s.exportLimitIP.allow(clientIP(r), 1, now) {
+	if !s.exportLimit.allow(sessionID(r), 1, now) || !s.exportLimitIP.allow(edge.ClientKey(r), 1, now) {
 		http.Error(w, "exporting too often", http.StatusTooManyRequests)
 		return
 	}
@@ -290,7 +290,8 @@ func (s *Server) demoRowsExport(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "too many downloads at once", http.StatusServiceUnavailable)
 		return
 	}
-	setWriteDeadline(w, r, time.Now().Add(time.Minute))
+	rc := http.NewResponseController(w)
+	rc.SetWriteDeadline(time.Now().Add(time.Minute))
 
 	h := w.Header()
 	h.Set("Access-Control-Allow-Origin", "*") // public; used from the playground sandbox
@@ -343,7 +344,7 @@ func (s *Server) demoRowsExport(w http.ResponseWriter, r *http.Request) {
 	err := s.q.View(r.Context(), func(rd *queries.Reader) error {
 		return rd.EachDemoStar(r.Context(), key, dir == "desc", ids, func(st demo.Star) error {
 			if n++; n%1000 == 0 {
-				setWriteDeadline(w, r, time.Now().Add(time.Minute))
+				rc.SetWriteDeadline(time.Now().Add(time.Minute))
 			}
 			return write(st)
 		})

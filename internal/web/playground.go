@@ -17,6 +17,7 @@ import (
 
 	"github.com/a-h/templ"
 	"github.com/starfederation/datastar-go/datastar"
+	"github.com/zweiundeins/lith/edge"
 
 	"starbase/internal/commands"
 	"starbase/internal/queries"
@@ -414,7 +415,7 @@ func (s *Server) cmdSnippet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now()
-	if !s.saveLimit.allow(sessionID(r), 1, now) || !s.saveLimitIP.allow(clientIP(r), 1, now) {
+	if !s.saveLimit.allow(sessionID(r), 1, now) || !s.saveLimitIP.allow(edge.ClientKey(r), 1, now) {
 		http.Error(w, "saving too often, try again in a minute", http.StatusTooManyRequests)
 		return
 	}

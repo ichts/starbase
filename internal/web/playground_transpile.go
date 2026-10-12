@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/zweiundeins/lith/edge"
+
 	"starbase/internal/catalog"
 	"starbase/internal/commands"
 )
@@ -25,7 +27,7 @@ func (s *Server) playgroundTranspile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad body", http.StatusBadRequest)
 		return
 	}
-	if !s.transpileLimit.allow(clientIP(r), 1, time.Now()) {
+	if !s.transpileLimit.allow(edge.ClientKey(r), 1, time.Now()) {
 		http.Error(w, "transpiling too often", http.StatusTooManyRequests)
 		return
 	}

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/starfederation/datastar-go/datastar"
+	"github.com/zweiundeins/lith/edge"
 
 	"starbase/internal/commands"
 	"starbase/internal/ui"
@@ -29,7 +30,7 @@ func (s *Server) playgroundSize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now()
-	if !s.sizeLimit.allow(sessionID(r), 1, now) || !s.sizeLimitIP.allow(clientIP(r), 1, now) {
+	if !s.sizeLimit.allow(sessionID(r), 1, now) || !s.sizeLimitIP.allow(edge.ClientKey(r), 1, now) {
 		http.Error(w, "measuring too often", http.StatusTooManyRequests)
 		return
 	}

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/starfederation/datastar-go/datastar"
+	"github.com/zweiundeins/lith/edge"
 	"github.com/zweiundeins/lith/live"
 	"github.com/zweiundeins/lith/sse"
 
@@ -119,7 +120,7 @@ func (s *Server) cmdPaint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now()
-	if !s.paintLimit.allow(sessionID(r), len(p.Cells), now) || !s.paintLimitIP.allow(clientIP(r), len(p.Cells), now) {
+	if !s.paintLimit.allow(sessionID(r), len(p.Cells), now) || !s.paintLimitIP.allow(edge.ClientKey(r), len(p.Cells), now) {
 		http.Error(w, "painting too fast", http.StatusTooManyRequests)
 		return
 	}

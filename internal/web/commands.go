@@ -7,21 +7,21 @@ import (
 	"time"
 
 	"github.com/starfederation/datastar-go/datastar"
+	"github.com/zweiundeins/lith/writer"
 
 	"starbase/internal/commands"
-	"starbase/internal/cqrs"
 	"starbase/internal/model"
 	"starbase/internal/queries"
 )
 
 // send enqueues a command and answers 204. The tab's render stream shows
 // the outcome; commands never return HTML.
-func (s *Server) send(w http.ResponseWriter, r *http.Request, cmd cqrs.Command) {
-	err := s.bus.Send(cmd)
+func (s *Server) send(w http.ResponseWriter, r *http.Request, cmd writer.Command) {
+	err := s.writer.Send(cmd)
 	switch {
 	case err == nil:
 		w.WriteHeader(http.StatusNoContent)
-	case errors.Is(err, cqrs.ErrInvalid):
+	case errors.Is(err, writer.ErrInvalid):
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	default:
 		s.log.Warn("command rejected", "err", err)

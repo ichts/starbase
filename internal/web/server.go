@@ -12,6 +12,8 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/zweiundeins/lith/writer"
+
 	"starbase/internal/catalog"
 	"starbase/internal/config"
 	"starbase/internal/cqrs"
@@ -23,7 +25,7 @@ type Server struct {
 	ctx     context.Context // cancelled on shutdown; ends render streams
 	cfg     config.Config
 	log     *slog.Logger
-	bus     *cqrs.Bus
+	writer  *writer.Writer
 	hub     *cqrs.Hub
 	q       *queries.Queries
 	catalog *catalog.Catalog
@@ -62,7 +64,7 @@ type Server struct {
 type Deps struct {
 	Config   config.Config
 	Log      *slog.Logger
-	Bus      *cqrs.Bus
+	Writer   *writer.Writer
 	Hub      *cqrs.Hub
 	Queries  *queries.Queries
 	Catalog  *catalog.Catalog
@@ -76,7 +78,7 @@ func New(ctx context.Context, d Deps) *Server {
 		ctx:     ctx,
 		cfg:     d.Config,
 		log:     d.Log,
-		bus:     d.Bus,
+		writer:  d.Writer,
 		hub:     d.Hub,
 		q:       d.Queries,
 		catalog: d.Catalog,

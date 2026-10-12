@@ -16,7 +16,7 @@ import (
 // size table, also when it is written in TypeScript (dropdown): raw is then
 // the TypeScript as written.
 func TestPlaygroundSize(t *testing.T) {
-	ts, c, _, cat := newServerBus(t)
+	ts, c, _, cat := newServerWriter(t)
 	measure := func(slug, name, code string) string {
 		t.Helper()
 		body := `{"component":` + strconv.Quote(slug) + `,"name":` + strconv.Quote(name) + `,"code":` + strconv.Quote(code) + `}`

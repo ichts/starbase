@@ -12,12 +12,12 @@ require (
 	github.com/starfederation/datastar-go v1.2.2
 	github.com/tdewolff/minify/v2 v2.24.18
 	github.com/yuin/goldmark v1.8.6
+	github.com/zweiundeins/lith v0.0.0-00010101000000-000000000000
 	go.abhg.dev/goldmark/frontmatter v0.3.0
 	golang.org/x/oauth2 v0.37.0
 	golang.org/x/sys v0.48.0
 	golang.org/x/text v0.42.0
 	gopkg.in/yaml.v3 v3.0.1
-	modernc.org/sqlite v1.60.1
 )
 
 require (
@@ -165,6 +165,7 @@ require (
 	modernc.org/libc v1.77.1 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
+	modernc.org/sqlite v1.60.1 // indirect
 	mvdan.cc/sh/moreinterp v0.0.0-20260817215856-d6550df7ed8d // indirect
 	mvdan.cc/sh/v3 v3.14.1 // indirect
 )
@@ -174,3 +175,5 @@ tool (
 	github.com/air-verse/air
 	github.com/go-task/task/v3/cmd/task
 )
+
+replace github.com/zweiundeins/lith => /develop/lith

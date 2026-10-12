@@ -1,15 +1,16 @@
-// Package app wires the application together: catalog, database, command
-// bus and HTTP handler. Used by the server binary and by tools that need the
+// Package app wires the application together: catalog, database, writer
+// and HTTP handler. Used by the server binary and by tools that need the
 // real app in-process (cmd/manifests).
 package app
 
 import (
 	"context"
-	"database/sql"
 	"log/slog"
 	"net/http"
 	"path/filepath"
 	"time"
+
+	"github.com/zweiundeins/lith/writer"
 
 	"starbase/components"
 	"starbase/content"
@@ -27,23 +28,17 @@ import (
 type App struct {
 	Handler http.Handler
 	Catalog *catalog.Catalog
-	bus     *cqrs.Bus
+	w       *writer.Writer
 	close   func()
 }
 
-// Close stops the command bus and closes the database. Call it after the
-// HTTP server has shut down.
+// Close applies the commands still queued, stops the writer and closes the
+// database. Call it after the HTTP server has shut down.
 func (a *App) Close() { a.close() }
 
 // Settle returns once the commands sent before it, such as the startup
-// seeding, are applied: the bus applies them in order.
-func (a *App) Settle(ctx context.Context) error { return a.bus.Exec(ctx, settled{}) }
-
-// settled changes nothing; Settle waits for it.
-type settled struct{}
-
-func (settled) Apply(context.Context, *sql.Tx) error { return nil }
-func (settled) Scope() string                        { return "" } // touches no view
+// seeding, are applied.
+func (a *App) Settle(ctx context.Context) error { return a.w.Flush(ctx) }
 
 // New builds the app. ctx bounds the lifetime of render streams: cancel it
 // to end them (e.g. before http.Server.Shutdown).
@@ -57,26 +52,30 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error)
 		return nil, err
 	}
 	hub := cqrs.NewHub()
-	bus := cqrs.NewBus(database.W, hub, log)
-	// The bus outlives the HTTP server so in-flight commands can finish.
-	busCtx, stopBus := context.WithCancel(context.Background())
-	busDone := make(chan struct{})
-	go func() { bus.Run(busCtx); close(busDone) }()
+	w, err := writer.New(database, writer.Options{OnCommit: hub.Changed, Log: log})
+	if err != nil {
+		database.Close()
+		return nil, err
+	}
+	// The writer outlives the HTTP server, so in-flight commands can finish:
+	// Close applies what is queued.
+	go w.Run(context.Background())
 	closeAll := func() {
-		stopBus()
-		<-busDone
+		if err := w.Close(); err != nil {
+			log.Warn("closing the writer", "err", err)
+		}
 		database.Close()
 	}
 
-	if err := bus.Exec(ctx, commands.SyncCatalog{Catalog: cat, Datastar: static.Datastar()}); err != nil {
+	if err := w.Do(ctx, commands.SyncCatalog{Catalog: cat, Datastar: static.Datastar()}); err != nil {
 		closeAll()
 		return nil, err
 	}
-	bus.Send(commands.PruneTabs{OlderThan: 30 * 24 * time.Hour})
-	bus.Send(commands.PruneSessionPrefs{OlderThan: 400 * 24 * time.Hour})
-	bus.Send(commands.SeedBoard{})
-	bus.Send(commands.SeedDemo{})
-	bus.Send(commands.SeedStars{})
+	w.Send(commands.PruneTabs{OlderThan: 30 * 24 * time.Hour})
+	w.Send(commands.PruneSessionPrefs{OlderThan: 400 * 24 * time.Hour})
+	w.Send(commands.SeedBoard{})
+	w.Send(commands.SeedDemo{})
+	w.Send(commands.SeedStars{})
 	log.Info("catalog synced", "components", len(cat.Components), "hash", cat.Hash)
 
 	// The type check's compiler unpacks next to the database on the first check.
@@ -84,13 +83,13 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error)
 	srv := web.New(ctx, web.Deps{
 		Config:   cfg,
 		Log:      log,
-		Bus:      bus,
+		Writer:   w,
 		Hub:      hub,
-		Queries:  queries.New(database.R),
+		Queries:  queries.New(database),
 		Catalog:  cat,
 		StaticFS: static.FS,
 		Content:  content.FS,
 		Checker:  checker,
 	})
-	return &App{Handler: srv.Handler(), Catalog: cat, bus: bus, close: closeAll}, nil
+	return &App{Handler: srv.Handler(), Catalog: cat, w: w, close: closeAll}, nil
 }

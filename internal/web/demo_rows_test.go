@@ -18,8 +18,8 @@ import (
 )
 
 func TestDemoRows(t *testing.T) {
-	ts, c, bus, _ := newServerBus(t)
-	if err := bus.Exec(context.Background(), commands.SeedStars{}); err != nil {
+	ts, c, wr, _ := newServerWriter(t)
+	if err := wr.Do(context.Background(), commands.SeedStars{}); err != nil {
 		t.Fatal(err)
 	}
 	type window struct {
@@ -99,8 +99,8 @@ func TestDemoRows(t *testing.T) {
 }
 
 func TestDemoRowsExport(t *testing.T) {
-	ts, c, bus, _ := newServerBus(t)
-	if err := bus.Exec(context.Background(), commands.SeedStars{}); err != nil {
+	ts, c, wr, _ := newServerWriter(t)
+	if err := wr.Do(context.Background(), commands.SeedStars{}); err != nil {
 		t.Fatal(err)
 	}
 	// fresh has no cookie jar: a new session every time. With a new address

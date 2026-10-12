@@ -53,7 +53,7 @@ func servedSRI(t *testing.T, c *http.Client, u string) string {
 }
 
 func TestInstallSnippets(t *testing.T) {
-	ts, c, _, cat := newServerBus(t)
+	ts, c, _, cat := newServerWriter(t)
 	slider, _ := cat.Get("slider")
 	_, page := get(t, c, ts.URL+"/components/slider")
 	p := installPanels(t, page)
@@ -143,7 +143,7 @@ func TestInstallSnippets(t *testing.T) {
 // A component that renders others pins them too (code-playground renders
 // code-editor, which imports its vendored Prism).
 func TestInstallDependencies(t *testing.T) {
-	ts, c, _, cat := newServerBus(t)
+	ts, c, _, cat := newServerWriter(t)
 	pg, _ := cat.Get("code-playground")
 	editor, _ := cat.Get("code-editor")
 	deps := cat.Deps(pg)
@@ -234,8 +234,7 @@ func TestInstallTabRemembered(t *testing.T) {
 // ECharts) must be in the import map's integrity, and every hash must match
 // the bytes served. Already-minified vendored files are their own .min.
 func TestInstallIntegrityCoversImports(t *testing.T) {
-	ts, c, bus, _ := newServerBus(t)
-	_ = bus
+	ts, c, _, _ := newServerWriter(t)
 	for slug, imported := range map[string]string{"code-editor": "vendor/prism.min.js", "echarts": "vendor/echarts.esm.min.js"} {
 		_, page := get(t, c, ts.URL+"/components/"+slug)
 		p := installPanels(t, page)

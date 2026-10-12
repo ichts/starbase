@@ -10,9 +10,11 @@ import (
 	"testing"
 	"testing/fstest"
 
+	"github.com/zweiundeins/lith/sqlite"
+	"github.com/zweiundeins/lith/writer"
+
 	"starbase/internal/catalog"
 	"starbase/internal/commands"
-	"starbase/internal/cqrs"
 	"starbase/internal/queries"
 )
 
@@ -27,14 +29,11 @@ type storedFile struct {
 func TestFileBodiesMigration(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "s.db")
-	w, err := sql.Open("sqlite", dsn(path)+"&_txlock=immediate")
+	old, err := sqlite.Open(ctx, path, sqlite.Options{Migrate: func(ctx context.Context, w *sql.DB) error { return migrateTo(ctx, w, 9) }})
 	if err != nil {
 		t.Fatal(err)
 	}
-	w.SetMaxOpenConns(1)
-	if err := migrateTo(ctx, w, 9); err != nil {
-		t.Fatal(err)
-	}
+	w := old.W
 	lib := bytes.Repeat([]byte("export const lib = 1;\n"), 50_000) // a vendored library, 1.1 MB, in both versions
 	datastar := []byte("// Datastar\n")
 	files := []storedFile{
@@ -54,7 +53,7 @@ func TestFileBodiesMigration(t *testing.T) {
 		INSERT INTO catalog_snapshot_components (snapshot, slug, hash) VALUES ('cccccccccccc', 'gone', 'aaaaaaaaaaaa')`); err != nil {
 		t.Fatal(err)
 	}
-	w.Close()
+	old.Close()
 
 	d, err := Open(ctx, path)
 	if err != nil {
@@ -129,10 +128,14 @@ func TestFileBodiesMigration(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	bus := cqrs.NewBus(d.W, cqrs.NewHub(), slog.New(slog.NewTextHandler(io.Discard, nil)))
-	go bus.Run(ctx)
+	wr, err := writer.New(d, writer.Options{Log: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go wr.Run(ctx)
+	defer wr.Close()
 	sync := func() (rows, bodies int) {
-		if err := bus.Exec(ctx, commands.SyncCatalog{Catalog: cat, Datastar: datastar}); err != nil {
+		if err := wr.Do(ctx, commands.SyncCatalog{Catalog: cat, Datastar: datastar}); err != nil {
 			t.Fatal(err)
 		}
 		return count(`SELECT count(*) FROM component_files`), count(`SELECT count(*) FROM file_bodies`)

@@ -2,12 +2,13 @@ package web_test
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"regexp"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/zweiundeins/lith/writer"
 
 	"starbase/internal/catalog"
 	"starbase/internal/ui"
@@ -17,12 +18,12 @@ import (
 // published by a build that made them differently.
 type restamp struct{ slug, hash, path, body string }
 
-func (c restamp) Apply(ctx context.Context, tx *sql.Tx) error {
+func (c restamp) Apply(tx *writer.Tx) error {
 	sri := catalog.SRI([]byte(c.body))
-	if _, err := tx.ExecContext(ctx, `INSERT INTO file_bodies (integrity, body) VALUES (?, ?)`, sri, []byte(c.body)); err != nil {
+	if _, err := tx.Exec(`INSERT INTO file_bodies (integrity, body) VALUES (?, ?)`, sri, []byte(c.body)); err != nil {
 		return err
 	}
-	_, err := tx.ExecContext(ctx, `UPDATE component_files SET integrity = ? WHERE slug = ? AND hash = ? AND path = ?`, sri, c.slug, c.hash, c.path)
+	_, err := tx.Exec(`UPDATE component_files SET integrity = ? WHERE slug = ? AND hash = ? AND path = ?`, sri, c.slug, c.hash, c.path)
 	return err
 }
 
@@ -31,7 +32,7 @@ func (c restamp) Apply(ctx context.Context, tx *sql.Tx) error {
 // in the snapshot's import map, and frozen: the stored bytes are served even
 // when this binary would build them differently.
 func TestComponentBundleURL(t *testing.T) {
-	ts, c, bus, cat := newServerBus(t)
+	ts, c, wr, cat := newServerWriter(t)
 	kanban, _ := cat.Get("kanban-board")
 	bundle, err := cat.BundleOf(kanban)
 	if err != nil {
@@ -57,7 +58,7 @@ func TestComponentBundleURL(t *testing.T) {
 	}
 
 	frozen := "/*! sb-kanban-board, version kanban-board@" + kanban.Hash + ", first published by another build */\n"
-	if err := bus.Exec(context.Background(), restamp{"kanban-board", kanban.Hash, catalog.BundleName("kanban-board"), frozen}); err != nil {
+	if err := wr.Do(context.Background(), restamp{"kanban-board", kanban.Hash, catalog.BundleName("kanban-board"), frozen}); err != nil {
 		t.Fatal(err)
 	}
 	if _, body := get(t, c, u); body != frozen {
@@ -73,7 +74,7 @@ func TestComponentBundleURL(t *testing.T) {
 // component page's meta row and the head of its Size section, with the
 // module files below, behind "As module files".
 func TestBundleSizesOnPages(t *testing.T) {
-	ts, c, _, cat := newServerBus(t)
+	ts, c, _, cat := newServerWriter(t)
 	kanban, _ := cat.Get("kanban-board")
 	size := ui.FmtBytes(kanban.Sizes.Total.Min)
 	if kanban.Sizes.Total != kanban.Sizes.Bundle.Size || size == ui.FmtBytes(kanban.Sizes.ModulesTotal.Min) {
@@ -112,7 +113,7 @@ func TestBundleSizesOnPages(t *testing.T) {
 // was stored with: one from before, which loads the module files, still
 // serves that map, and the files it names.
 func TestSnapshotsKeepTheirMaps(t *testing.T) {
-	ts, c, bus, cat := newServerBus(t)
+	ts, c, wr, cat := newServerWriter(t)
 	kanban, _ := cat.Get("kanban-board")
 	_, auto := get(t, c, ts.URL+"/c/autoloader.js")
 	_, snap := get(t, c, ts.URL+"/c/@"+cat.Hash+"/autoloader.js")
@@ -122,7 +123,7 @@ func TestSnapshotsKeepTheirMaps(t *testing.T) {
 		}
 	}
 	old := strings.ReplaceAll(catalog.AutoloaderJS(cat, "../"), ".bundle.min.js", ".min.js")
-	if err := bus.Exec(context.Background(), oldSnapshot{cat, old}); err != nil {
+	if err := wr.Do(context.Background(), oldSnapshot{cat, old}); err != nil {
 		t.Fatal(err)
 	}
 	res, body := get(t, c, ts.URL+"/c/@0123456789ab/autoloader.js")
@@ -141,12 +142,12 @@ type oldSnapshot struct {
 	auto string
 }
 
-func (s oldSnapshot) Apply(ctx context.Context, tx *sql.Tx) error {
-	if _, err := tx.ExecContext(ctx, `INSERT INTO catalog_snapshots (hash, autoloader, integrity, created_at) VALUES ('0123456789ab', ?, ?, 1)`, s.auto, catalog.SRI([]byte(s.auto))); err != nil {
+func (s oldSnapshot) Apply(tx *writer.Tx) error {
+	if _, err := tx.Exec(`INSERT INTO catalog_snapshots (hash, autoloader, integrity, created_at) VALUES ('0123456789ab', ?, ?, 1)`, s.auto, catalog.SRI([]byte(s.auto))); err != nil {
 		return err
 	}
 	for _, c := range s.cat.Components {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO catalog_snapshot_components (snapshot, slug, hash) VALUES ('0123456789ab', ?, ?)`, c.Slug, c.Hash); err != nil {
+		if _, err := tx.Exec(`INSERT INTO catalog_snapshot_components (snapshot, slug, hash) VALUES ('0123456789ab', ?, ?)`, c.Slug, c.Hash); err != nil {
 			return err
 		}
 	}

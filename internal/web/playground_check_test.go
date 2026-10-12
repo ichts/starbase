@@ -12,7 +12,7 @@ import (
 
 // The playground's type check answers with $_diag for component.js.
 func TestPlaygroundCheck(t *testing.T) {
-	ts, c, _, cat := newServerBus(t)
+	ts, c, _, cat := newServerWriter(t)
 	check := func(slug, code string) string {
 		t.Helper()
 		body := `{"component":` + strconv.Quote(slug) + `,"code":` + strconv.Quote(code) + `}`

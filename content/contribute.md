@@ -133,12 +133,12 @@ func (s *Server) cmdFlight(w http.ResponseWriter, r *http.Request) {
 
 // send enqueues a command and answers 204. The tab's render stream shows
 // the outcome; commands never return HTML.
-func (s *Server) send(w http.ResponseWriter, r *http.Request, cmd cqrs.Command) {
-	err := s.bus.Send(cmd)
+func (s *Server) send(w http.ResponseWriter, r *http.Request, cmd writer.Command) {
+	err := s.writer.Send(cmd)
 	switch {
 	case err == nil:
 		w.WriteHeader(http.StatusNoContent)
-	case errors.Is(err, cqrs.ErrInvalid):
+	case errors.Is(err, writer.ErrInvalid):
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	default:
 		s.log.Warn("command rejected", "err", err)
@@ -147,9 +147,9 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request, cmd cqrs.Command) 
 }
 ```
 
-The command validates, then applies the change in the single writer's transaction. `Scope` limits the re-render to this session's streams, and the page shows the stored value, normalized or not:
+The command validates, then applies the change in the single writer's transaction. It touches its tab's topic, so only that tab's page renders again, and the page shows the stored value, normalized or not:
 
-```go source=internal/commands/flight.go#SetFlight,SetFlight.Validate,SetFlight.Scope,SetFlight.Apply
+```go source=internal/commands/flight.go#SetFlight,SetFlight.Validate,SetFlight.Apply
 // SetFlight sets one field of the Showcase's flight plan (the commands demo).
 // The server validates and normalizes; the page re-renders from the stored
 // plan, which is what confirms (or corrects) the control that sent it.
@@ -185,10 +185,9 @@ func (c SetFlight) Validate() error {
 	return nil
 }
 
-func (c SetFlight) Scope() string { return c.SID }
-
-func (c SetFlight) Apply(ctx context.Context, tx *sql.Tx) error {
-	return updateTab(ctx, tx, c.SID, c.TabID, model.TabState{}, func(st *model.TabState) {
+func (c SetFlight) Apply(tx *writer.Tx) error {
+	tx.Touch(TabTopic(c.TabID))
+	return updateTab(tx, c.SID, c.TabID, model.TabState{}, func(st *model.TabState) {
 		f := st.Flight.OrDefault()
 		switch c.Name {
 		case "thrust":

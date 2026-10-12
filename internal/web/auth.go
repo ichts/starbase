@@ -106,7 +106,7 @@ func (s *Server) githubCallback(w http.ResponseWriter, r *http.Request) {
 // signIn rotates the session id (preventing fixation) and binds it to u.
 func (s *Server) signIn(w http.ResponseWriter, r *http.Request, u model.User, next string) {
 	sid := randomToken(20)
-	if err := s.bus.Exec(r.Context(), commands.SignIn{SID: sid, User: u}); err != nil {
+	if err := s.writer.Do(r.Context(), commands.SignIn{SID: sid, User: u}); err != nil {
 		s.fail(w, r, err)
 		return
 	}
@@ -138,7 +138,7 @@ func fetchGitHubUser(ctx context.Context, c *http.Client) (model.User, error) {
 }
 
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
-	if err := s.bus.Exec(r.Context(), commands.SignOut{SID: sessionID(r)}); err != nil {
+	if err := s.writer.Do(r.Context(), commands.SignOut{SID: sessionID(r)}); err != nil {
 		s.fail(w, r, err)
 		return
 	}

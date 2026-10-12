@@ -1,6 +1,11 @@
+// Package cqrs holds the hub that wakes the render streams after the
+// writer's commits.
 package cqrs
 
-import "sync"
+import (
+	"strings"
+	"sync"
+)
 
 // Hub tracks open render streams and wakes them after commits.
 //
@@ -66,25 +71,31 @@ func (h *Hub) Count(path string) int {
 	return n
 }
 
-// Notify wakes the streams of the given sessions; with all set, every stream.
-func (h *Hub) Notify(all bool, sids map[string]struct{}) {
+// Changed wakes the streams that the writer's committed topics name
+// (commands.TopicAll, SessionTopic, TabTopic). It is the writer's OnCommit.
+func (h *Hub) Changed(topics []string) {
+	all := false
+	sids, tabs := map[string]bool{}, map[string]bool{}
+	for _, t := range topics {
+		if sid, ok := strings.CutPrefix(t, "sid:"); ok {
+			sids[sid] = true
+		} else if tab, ok := strings.CutPrefix(t, "tab:"); ok {
+			tabs[tab] = true
+		} else if t == "all" {
+			all = true
+		}
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for s := range h.subs {
-		if !all {
-			if _, ok := sids[s.SID]; !ok {
-				continue
+		if all || sids[s.SID] || tabs[s.TabID] {
+			select {
+			case s.C <- struct{}{}:
+			default:
 			}
-		}
-		select {
-		case s.C <- struct{}{}:
-		default:
 		}
 	}
 }
-
-// NotifyAll wakes every stream, e.g. after a dev reload of the catalog.
-func (h *Hub) NotifyAll() { h.Notify(true, nil) }
 
 // Len returns the number of open streams.
 func (h *Hub) Len() int {

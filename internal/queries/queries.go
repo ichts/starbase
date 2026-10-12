@@ -12,25 +12,26 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/zweiundeins/lith/sqlite"
+
 	"starbase/internal/model"
 )
 
-type Queries struct{ db *sql.DB }
+type Queries struct{ db *sqlite.DB }
 
-func New(db *sql.DB) *Queries { return &Queries{db: db} }
+func New(db *sqlite.DB) *Queries { return &Queries{db: db} }
 
 // Reader runs queries against one snapshot.
 type Reader struct{ tx *sql.Tx }
 
-// View runs fn inside a read transaction.
+// View runs fn inside a read transaction of its own.
 func (q *Queries) View(ctx context.Context, fn func(*Reader) error) error {
-	tx, err := q.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	return fn(&Reader{tx: tx})
+	return q.db.View(ctx, func(tx *sql.Tx) error { return fn(Read(tx)) })
 }
+
+// Read runs queries in a read transaction that is already open: a render
+// worker's, which every view it renders in a tick shares.
+func Read(tx *sql.Tx) *Reader { return &Reader{tx: tx} }
 
 // SessionUser returns the user bound to sid, or nil.
 func (r *Reader) SessionUser(ctx context.Context, sid string) (*model.User, error) {

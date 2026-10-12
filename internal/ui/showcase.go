@@ -40,14 +40,15 @@ func (s *Server) demoTelemetry(w http.ResponseWriter, r *http.Request) {
   })"></sb-pixel-board>`, "html")
 
 	boardGo = catalog.Highlight(`// internal/commands/board.go: runs inside the single writer's batch.
-func (c PaintPixels) Apply(ctx context.Context, tx *sql.Tx) error {
+func (c PaintPixels) Apply(tx *writer.Tx) error {
+	tx.Touch(TopicAll) // every open page renders again once the batch commits
 	for _, i := range c.Cells {
-		tx.ExecContext(ctx, `+"`"+`INSERT INTO board_cells (board, idx, color, painted_at)
+		tx.Exec(`+"`"+`INSERT INTO board_cells (board, idx, color, painted_at)
 			VALUES (?, ?, ?, ?) ON CONFLICT (board, idx) DO UPDATE
 			SET color = excluded.color, painted_at = excluded.painted_at`+"`"+`,
 			c.Board, i, c.Color, now)
 	}
-	// bump the version: every open stream re-renders once the batch commits
+	// bump the board's version, which its encoded cells are cached by
 	...
 }`, "go")
 )

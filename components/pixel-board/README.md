@@ -68,9 +68,9 @@ func (s *Server) cmdPaint(w http.ResponseWriter, r *http.Request) {
 ```
 
 ```go source=internal/commands/board.go#PaintPixels,PaintPixels.Validate,PaintPixels.Apply
-// PaintPixels paints cells of the shared board. Not Scoped: every viewer's
-// stream re-renders (pages without the board produce identical frames,
-// which the stream skips).
+// PaintPixels paints cells of the shared board. It touches TopicAll: every
+// open page renders again (a page without the board renders the frame it
+// already sent, which goes nowhere).
 type PaintPixels struct {
 	Board string
 	Color int
@@ -95,17 +95,18 @@ func (c PaintPixels) Validate() error {
 	return nil
 }
 
-func (c PaintPixels) Apply(ctx context.Context, tx *sql.Tx) error {
+func (c PaintPixels) Apply(tx *writer.Tx) error {
+	tx.Touch(TopicAll)
 	now := time.Now().Unix()
 	for _, i := range c.Cells {
-		if _, err := tx.ExecContext(ctx, `
+		if _, err := tx.Exec(`
 			INSERT INTO board_cells (board, idx, color, painted_at) VALUES (?, ?, ?, ?)
 			ON CONFLICT (board, idx) DO UPDATE SET color = excluded.color, painted_at = excluded.painted_at`,
 			c.Board, i, c.Color, now); err != nil {
 			return err
 		}
 	}
-	_, err := tx.ExecContext(ctx, `
+	_, err := tx.Exec(`
 		INSERT INTO boards (board, version, pixels) VALUES (?, 1, ?)
 		ON CONFLICT (board) DO UPDATE SET version = version + 1, pixels = pixels + excluded.pixels`,
 		c.Board, len(c.Cells))

@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"github.com/andybalholm/brotli"
 	"io"
 	"log/slog"
 	"net/http"
@@ -19,6 +18,9 @@ import (
 	"testing"
 	"testing/fstest"
 	"time"
+
+	"github.com/andybalholm/brotli"
+	"github.com/zweiundeins/lith/writer"
 
 	"starbase/components"
 	"starbase/content"
@@ -35,12 +37,12 @@ import (
 
 func newServer(t *testing.T) (*httptest.Server, *http.Client) {
 	t.Helper()
-	ts, c, _, _ := newServerBus(t)
+	ts, c, _, _ := newServerWriter(t)
 	return ts, c
 }
 
-// newServerBus also returns the bus and catalog, for tests that send commands.
-func newServerBus(t *testing.T) (*httptest.Server, *http.Client, *cqrs.Bus, *catalog.Catalog) {
+// newServerWriter also returns the writer and catalog, for tests that send commands.
+func newServerWriter(t *testing.T) (*httptest.Server, *http.Client, *writer.Writer, *catalog.Catalog) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -55,23 +57,27 @@ func newServerBus(t *testing.T) (*httptest.Server, *http.Client, *cqrs.Bus, *cat
 		t.Fatal(err)
 	}
 	hub := cqrs.NewHub()
-	bus := cqrs.NewBus(d.W, hub, log)
-	go bus.Run(ctx)
-	if err := bus.Exec(ctx, commands.SyncCatalog{Catalog: cat, Datastar: static.Datastar()}); err != nil {
+	wr, err := writer.New(d, writer.Options{OnCommit: hub.Changed, Log: log})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := bus.Exec(ctx, commands.SeedDemo{}); err != nil {
+	go wr.Run(ctx)
+	t.Cleanup(func() { wr.Close() })
+	if err := wr.Do(ctx, commands.SyncCatalog{Catalog: cat, Datastar: static.Datastar()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := wr.Do(ctx, commands.SeedDemo{}); err != nil {
 		t.Fatal(err)
 	}
 	ts := httptest.NewUnstartedServer(nil)
 	ts.Start()
 	cfg := config.Config{BaseURL: ts.URL, RepoURL: "https://example.com/repo"}
-	srv := web.New(ctx, web.Deps{Config: cfg, Log: log, Bus: bus, Hub: hub, Queries: queries.New(d.R),
+	srv := web.New(ctx, web.Deps{Config: cfg, Log: log, Writer: wr, Hub: hub, Queries: queries.New(d),
 		Catalog: cat, StaticFS: static.FS, Content: content.FS, Checker: tscheck.New(t.TempDir())})
 	ts.Config.Handler = srv.Handler()
 	t.Cleanup(func() { cancel(); ts.Close() })
 	jar, _ := cookiejar.New(nil)
-	return ts, &http.Client{Jar: jar}, bus, cat
+	return ts, &http.Client{Jar: jar}, wr, cat
 }
 
 func get(t *testing.T, c *http.Client, url string) (*http.Response, string) {
@@ -495,7 +501,7 @@ func TestSiteThemeFromCookie(t *testing.T) {
 }
 
 func TestVersionedURLs(t *testing.T) {
-	ts, c, bus, cat := newServerBus(t)
+	ts, c, wr, cat := newServerWriter(t)
 	button, _ := cat.Get("button")
 
 	// The current version of a module: immutable and open to other sites.
@@ -553,7 +559,7 @@ func TestVersionedURLs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := bus.Exec(context.Background(), commands.SyncCatalog{Catalog: oldCat}); err != nil {
+	if err := wr.Do(context.Background(), commands.SyncCatalog{Catalog: oldCat}); err != nil {
 		t.Fatal(err)
 	}
 	gone, _ := oldCat.Get("gone")
@@ -665,7 +671,7 @@ func TestUnlistedComponent(t *testing.T) {
 // exactly the original bytes, and never compressed a second time by the
 // middleware.
 func TestPrecompressedAssets(t *testing.T) {
-	ts, _, _, cat := newServerBus(t)
+	ts, _, _, cat := newServerWriter(t)
 	button, _ := cat.Get("button")
 	client := &http.Client{Transport: &http.Transport{DisableCompression: true}} // see the raw encoding
 	for _, u := range []string{"/c/" + button.VersionedMinScript(), "/c/" + button.VersionedScript(), "/c/" + button.VersionedBundle(), "/c/autoloader.js", "/c/bundle.js"} {

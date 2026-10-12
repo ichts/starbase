@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 )
 
 // Bus is the single writer. Send enqueues without waiting; Exec waits for the
@@ -112,7 +113,7 @@ func (b *Bus) apply(ctx context.Context, batch []envelope) {
 			if _, err := tx.ExecContext(ctx, "SAVEPOINT cmd"); err != nil {
 				return err
 			}
-			if err := e.cmd.Apply(ctx, tx); err != nil {
+			if err := b.applyOne(ctx, tx, e.cmd); err != nil {
 				results[i] = err
 				if _, err := tx.ExecContext(ctx, "ROLLBACK TO cmd"); err != nil {
 					return err
@@ -148,4 +149,16 @@ func (b *Bus) apply(ctx context.Context, batch []envelope) {
 	if err == nil && (all || len(sids) > 0) {
 		b.hub.Notify(all, sids)
 	}
+}
+
+// applyOne runs cmd.Apply. A panic becomes the command's error, logged with
+// its stack, so the batch goes on without it.
+func (b *Bus) applyOne(ctx context.Context, tx *sql.Tx, cmd Command) (err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			b.log.Error("command panicked", "cmd", fmt.Sprintf("%T", cmd), "panic", p, "stack", string(debug.Stack()))
+			err = fmt.Errorf("panic: %v", p)
+		}
+	}()
+	return cmd.Apply(ctx, tx)
 }

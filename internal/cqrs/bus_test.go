@@ -1,12 +1,14 @@
 package cqrs_test
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
 	"io"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -29,6 +31,16 @@ func (c scopedNoop) Scope() string                      { return c.sid }
 type failing struct{}
 
 func (failing) Apply(context.Context, *sql.Tx) error { return errors.New("boom") }
+
+// panicking writes its row, then panics.
+type panicking struct{ login string }
+
+func (c panicking) Apply(ctx context.Context, tx *sql.Tx) error {
+	if err := (insertUser{c.login}).Apply(ctx, tx); err != nil {
+		return err
+	}
+	panic("boom")
+}
 
 type invalid struct{}
 
@@ -64,6 +76,39 @@ func TestFailingCommandDoesNotAbortBatch(t *testing.T) {
 	d.R.QueryRow(`SELECT count(*) FROM users`).Scan(&n)
 	if n != 2 {
 		t.Fatalf("users = %d, want 2", n)
+	}
+}
+
+func TestPanickingCommandDoesNotAbortBatch(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	d, err := db.Open(ctx, filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { d.Close() })
+	var log bytes.Buffer
+	bus := cqrs.NewBus(d.W, cqrs.NewHub(), slog.New(slog.NewTextHandler(&log, nil)))
+	// Queued before the bus runs, so the three share one batch.
+	bus.Send(insertUser{"a"})
+	bus.Send(panicking{"bb"})
+	bus.Send(insertUser{"ccc"})
+	go bus.Run(ctx)
+	if err := bus.Exec(ctx, panicking{"dddd"}); err == nil {
+		t.Fatal("expected the panic as the command's error")
+	}
+	if err := bus.Exec(ctx, insertUser{"eeeee"}); err != nil {
+		t.Fatal(err)
+	}
+	var logins string
+	if err := d.R.QueryRow(`SELECT group_concat(login, ' ' ORDER BY login) FROM users`).Scan(&logins); err != nil {
+		t.Fatal(err)
+	}
+	if want := "a ccc eeeee"; logins != want {
+		t.Fatalf("users = %q, want %q", logins, want)
+	}
+	if !strings.Contains(log.String(), "panicking.Apply") {
+		t.Fatalf("panic logged without its stack:\n%s", log.String())
 	}
 }
 

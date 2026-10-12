@@ -18,7 +18,7 @@ Go · templ · SQLite · Datastar + Rocket · CQRS · plain modern CSS. No Node,
 - **Submissions without tools:** a GitHub issue form (paste code, link a repo or a playground link); a bot validates it and opens a pull request.
 - **Autoloader:** one `<script>` loads each `<sb-*>` component on first use, on any site.
 - **Showcase:** a live Mission Control dashboard and a multiplayer pixel board, both server-driven.
-- **Realtime everything:** every tab keeps one Brotli-compressed SSE render stream; state changes are CQRS commands.
+- **Realtime everything:** every tab keeps one compressed SSE render stream (zstd or Brotli); state changes are CQRS commands.
 - Themes, pixel-art design system, zero Node, single static binary with embedded assets and SQLite.
 
 ## Run a release
@@ -123,24 +123,25 @@ playground:
 
 ## Architecture
 
-CQRS in the style of [hyperlith](https://github.com/andersmurphy/hyperlith):
+CQRS in the style of [hyperlith](https://github.com/andersmurphy/hyperlith), on lith, the runtime of our Go and SQLite apps:
 
 ```
 GET  /page           full server render (SEO), then data-init opens ↓
-POST /page           the tab's render stream (SSE, Brotli): render → wait for hub → render …
+POST /page           the tab's render stream (SSE, zstd or Brotli): the tab's view, rendered again
+                     in the next tick (at most one per 50 ms) after a commit touches it
 POST /cmd/...        commands: validate → enqueue → 204. Never HTML.
                      single writer: drain queue → one transaction (savepoint per command)
-                     → commit → wake affected streams (per session, or all)
+                     → commit → mark the views of the topics it touched (a tab, a session, or all)
 ```
 
-- **Write side:** `internal/cqrs` (Bus and Hub) and `internal/commands` (one struct per state change).
-- **Read side:** `internal/queries` runs every render inside one read transaction.
+- **Write side:** `internal/commands` (one struct per state change), applied by lith's writer.
+- **Read side:** `internal/queries` runs every render inside one read transaction: a document's own, or a render worker's, which all the pages it renders in a tick share.
 - **Views:** `internal/ui` holds templ components, pure functions of the read model. The same function serves the GET and every stream frame. Datastar morphs `#app`.
 - **Per-tab UI state** (filters, sort, preview theme) is stored in SQLite, in `tab_state`. The stream keeps the URL in sync.
 - **Catalog:** `components/` is embedded. At startup `SyncCatalog` mirrors it into SQLite (FTS5 for search).
 - **Design system:** `static/css`. Primitive `--sb-*` tokens feed semantic tokens, which feed components. Layers, container queries, nesting and OKLCH. Themes remap the semantic tokens only.
 - **Pixel art** is generated in Go (`internal/pixelart`) and served as cached SVG.
-- **Multiplayer pixel board** (Showcase): `sb-pixel-board` is driven by one server-owned attribute (`cells`, a hex digit per pixel) re-rendered in every stream frame. Painting is the `PaintPixels` command (`POST /cmd/paint`, rate-limited per session). The hub counts viewers per page ("N watching").
+- **Multiplayer pixel board** (Showcase): `sb-pixel-board` is driven by one server-owned attribute (`cells`, a hex digit per pixel) re-rendered in every stream frame. Painting is the `PaintPixels` command (`POST /cmd/paint`, rate-limited per session). A presence view that every viewer shares counts the viewers ("N watching").
 - **Code playground:** `/playground` (and "Open in playground" on every component) edits a component's JS and HTML with `sb-code-editor` and `sb-code-playground`. Previews run in a `sandbox="allow-scripts allow-modals"` iframe served by `/playground/run`, with its own CSP and an opaque origin. A TypeScript switch turns `component.js` into `component.ts`, which the runner has the server transpile (`/playground/transpile`, esbuild). TypeScript, and JavaScript that starts with `// @ts-check`, is type-checked on the server against the patched Datastar build's declarations (`internal/tscheck`: TypeScript's native compiler, embedded in the binary and run as a subprocess) and underlined in the editor. "Save & share" is the `SaveSnippet` command (immutable `/playground?s=<id>` links). "Submit as component" prefills the issue form with that link, and the bot imports it (set the repository variable `STARBASE_URL`).
 - **Live demo data:** `GET /demo/telemetry` streams a simulated mission as signal patches (`$_tm`). It is a pure function of time, with no state. The Showcase page's Mission Control and the gauge, sparkline and meter docs use it.
 - **Example dataset:** a small universe (galaxies, star systems, planets, moons, bright stars by constellation), seeded into SQLite at startup (`internal/demo`, `SeedDemo`). Two generic, stateless endpoints serve it to any component's docs:

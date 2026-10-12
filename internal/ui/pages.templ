@@ -410,7 +410,7 @@ templ PixelBoard(v BoardView) {
 				<p>After the commit, the writer tells the render loop what the batch touched, and a paint touches every page. In its next tick (at most one every 50 ms, however many strokes came in) the loop renders every open tab's page again from a fresh read snapshot, one read transaction per render worker, and sends the entire page again. The encoded board is cached per version, so a thousand viewers cost one query. Pages whose output didn't change send nothing.</p>
 				<p>Sending the whole page sounds wasteful until you look at the wire. The stream is compressed with zstd (Brotli in browsers without it), and the compressor keeps its window across frames. A full frame of this page is <strong>about 31 KB</strong>; the first one compresses to about 8 KB, and after a paint each complete re-render costs <strong>about 20 bytes</strong>. There is no diffing code anywhere: Datastar morphs the DOM, and compression takes care of the network.</p>
 				<h3>4. Presence</h3>
-				<p>"Watching" counts the open render streams on this page. The number is a view of its own that every viewer shares: when someone joins or leaves, the render loop renders that one number again and sends it to everyone, instead of everyone's whole page.</p>
+				<p>"Watching" counts the open render streams on this page. The number is a view of its own that every viewer shares: when someone joins or leaves, the render loop renders only that number again and sends it to every viewer.</p>
 			</div>
 		</details>
 	</section>

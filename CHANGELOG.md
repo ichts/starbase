@@ -51,6 +51,10 @@ Ten new components, seven of them drag-and-drop and editing surfaces from derekr
 - A pull request's preview of a component written in TypeScript opens its `.ts` source with the TypeScript switch on, and the type check reads the modules it imports at that commit.
 - `sb-code-editor`: highlights TypeScript (`language="ts"`), and `diagnostics` underlines problems sent by the page or the server, the line under the code shows the one at the caret, and F8 and Shift+F8 move between them. A problem whose word has changed disappears, so an older list doesn't point at the wrong place. `sb-code-playground` hands its own `diagnostics` to its editors, per file.
 
+### Changed
+
+- The server runs on lith, the runtime of our Go and SQLite apps: its writer batches the commands, and its render loop renders each changed page at most once every 50 ms, in one read transaction per render worker. Render streams are compressed with zstd where the browser takes it (Brotli otherwise) and hold less memory per open tab. On the Showcase, a viewer joining or leaving sends the others the new count, not their whole page.
+
 ### Fixed
 
 - `sb-code-playground`: setting `files` while the console had output threw, and an error thrown while the code loads now shows its line.

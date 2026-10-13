@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/starfederation/datastar-go/datastar"
+	"github.com/zweiundeins/lith/edge"
 	"github.com/zweiundeins/lith/writer"
 
 	"starbase/internal/commands"
@@ -48,7 +49,7 @@ func (s *Server) cmdBrowse(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad signals", http.StatusBadRequest)
 		return
 	}
-	s.send(w, r, commands.SetBrowseFilter{SID: sessionID(r), TabID: tabID, Browse: b})
+	s.send(w, r, commands.SetBrowseFilter{SID: edge.SessionID(r.Context()), TabID: tabID, Browse: b})
 }
 
 // cmdSort is a chosen sort: this page, and the session's default sort.
@@ -58,7 +59,7 @@ func (s *Server) cmdSort(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad signals", http.StatusBadRequest)
 		return
 	}
-	s.send(w, r, commands.SetGallerySort{SID: sessionID(r), TabID: tabID, Browse: b})
+	s.send(w, r, commands.SetGallerySort{SID: edge.SessionID(r.Context()), TabID: tabID, Browse: b})
 }
 
 func (s *Server) cmdStar(star bool) http.HandlerFunc {
@@ -66,7 +67,7 @@ func (s *Server) cmdStar(star bool) http.HandlerFunc {
 		var user *model.User
 		err := s.q.View(r.Context(), func(rd *queries.Reader) error {
 			var err error
-			user, err = rd.SessionUser(r.Context(), sessionID(r))
+			user, err = rd.SessionUser(r.Context(), edge.SessionID(r.Context()))
 			return err
 		})
 		if err != nil {
@@ -94,11 +95,11 @@ func (s *Server) cmdStar(star bool) http.HandlerFunc {
 // cmdTheme and cmdThemeStyle set the Themes page preview, a session
 // preference: it carries across pages and browser tabs.
 func (s *Server) cmdTheme(w http.ResponseWriter, r *http.Request) {
-	s.send(w, r, commands.SetPreviewTheme{SID: sessionID(r), Theme: r.PathValue("theme")})
+	s.send(w, r, commands.SetPreviewTheme{SID: edge.SessionID(r.Context()), Theme: r.PathValue("theme")})
 }
 
 func (s *Server) cmdThemeStyle(w http.ResponseWriter, r *http.Request) {
-	s.send(w, r, commands.SetPreviewStyle{SID: sessionID(r), Smooth: r.PathValue("style") == "smooth"})
+	s.send(w, r, commands.SetPreviewStyle{SID: edge.SessionID(r.Context()), Smooth: r.PathValue("style") == "smooth"})
 }
 
 // cmdInstallTab remembers the component pages' installation tab for the
@@ -111,7 +112,7 @@ func (s *Server) cmdInstallTab(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad payload", http.StatusBadRequest)
 		return
 	}
-	s.send(w, r, commands.SetInstallTab{SID: sessionID(r), Tab: p.Tab})
+	s.send(w, r, commands.SetInstallTab{SID: edge.SessionID(r.Context()), Tab: p.Tab})
 }
 
 // cmdFlight is the Showcase's commands demo: one field per request, from a
@@ -132,5 +133,5 @@ func (s *Server) cmdFlight(w http.ResponseWriter, r *http.Request) {
 	case <-r.Context().Done():
 		return
 	}
-	s.send(w, r, commands.SetFlight{SID: sessionID(r), TabID: p.TabID, Name: p.Name, Value: fmt.Sprint(p.Value)})
+	s.send(w, r, commands.SetFlight{SID: edge.SessionID(r.Context()), TabID: p.TabID, Name: p.Name, Value: fmt.Sprint(p.Value)})
 }

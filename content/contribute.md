@@ -128,7 +128,7 @@ func (s *Server) cmdFlight(w http.ResponseWriter, r *http.Request) {
 	case <-r.Context().Done():
 		return
 	}
-	s.send(w, r, commands.SetFlight{SID: sessionID(r), TabID: p.TabID, Name: p.Name, Value: fmt.Sprint(p.Value)})
+	s.send(w, r, commands.SetFlight{SID: edge.SessionID(r.Context()), TabID: p.TabID, Name: p.Name, Value: fmt.Sprint(p.Value)})
 }
 
 // send enqueues a command and answers 204. The tab's render stream shows

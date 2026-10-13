@@ -1,12 +1,19 @@
 package web_test
 
 import (
+	"context"
+	"io"
 	"net/http"
 	"net/http/cookiejar"
 	"regexp"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/zweiundeins/lith/writer"
+
+	"starbase/internal/commands"
+	"starbase/internal/model"
 )
 
 // eventually retries check until it holds: commands are applied after the
@@ -108,5 +115,50 @@ func TestGallerySortDefault(t *testing.T) {
 	// Another session has the plain default, and its URLs stay short.
 	if s, p := gallery(newSession(), "/"); s != "popular" || strings.Contains(p, "replaceState(null, &#39;&#39;, &#34;/?sort") {
 		t.Errorf("another session: sort %s", s)
+	}
+}
+
+// A session id from before edge.Sessions (160 bits, 27 characters) stays
+// valid: its browser stays signed in and keeps its preferences. A browser
+// without a valid id gets a new 256-bit one.
+func TestOldSessionIDsStayValid(t *testing.T) {
+	ts, _, wr, _ := newServerWriter(t)
+	old := "c3RhcmJhc2Ugc2Vzc2lvbiAxNjA" // 20 bytes in base64url, as starbase made them
+	for _, cmd := range []writer.Command{
+		commands.SignIn{SID: old, User: model.User{GitHubID: 42, Login: "ada"}},
+		commands.SetPreviewTheme{SID: old, Theme: "daylight"},
+	} {
+		if err := wr.Do(context.Background(), cmd); err != nil {
+			t.Fatal(err)
+		}
+	}
+	themes := func(cookie string) (setCookie []*http.Cookie, page string) {
+		t.Helper()
+		req, _ := http.NewRequest("GET", ts.URL+"/themes", nil)
+		if cookie != "" {
+			req.AddCookie(&http.Cookie{Name: "sid", Value: cookie})
+		}
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		b, _ := io.ReadAll(res.Body)
+		return res.Cookies(), string(b)
+	}
+	set, page := themes(old)
+	if len(set) != 0 {
+		t.Errorf("the old id was replaced: %v", set)
+	}
+	if !strings.Contains(page, "Signed in as <strong>ada</strong>") {
+		t.Error("the old id's browser was signed out")
+	}
+	if !strings.Contains(page, `data-sb-theme="daylight"`) {
+		t.Error("the old id's preferences were lost")
+	}
+	for _, cookie := range []string{"", old[:26], old + "A"} {
+		if set, _ := themes(cookie); len(set) != 1 || set[0].Name != "sid" || len(set[0].Value) != 43 {
+			t.Errorf("cookie %q: got %v, want a new 256-bit id", cookie, set)
+		}
 	}
 }

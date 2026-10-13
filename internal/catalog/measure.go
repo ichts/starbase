@@ -7,8 +7,7 @@ import (
 	"strings"
 
 	"github.com/evanw/esbuild/pkg/api"
-
-	"starbase/internal/precompress"
+	"github.com/zweiundeins/lith/edge"
 )
 
 // Measured is what code written in the playground would weigh as a
@@ -53,7 +52,7 @@ func (cat *Catalog) Measure(name string, code []byte, c *Component) (Measured, e
 		return Measured{}, fmt.Errorf("esbuild: %s", res.Errors[0].Text)
 	}
 	b := res.OutputFiles[0].Contents
-	out := Measured{Raw: len(code), Min: len(b), MinBrotli: precompress.BrotliLen(b)}
+	out := Measured{Raw: len(code), Min: len(b), MinBrotli: edge.BrotliLen(b)}
 
 	// The files of c it loads on first use, and what those import.
 	if c != nil {

@@ -415,14 +415,14 @@ func (s *Server) cmdSnippet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now()
-	if !s.saveLimit.allow(sessionID(r), 1, now) || !s.saveLimitIP.allow(edge.ClientKey(r), 1, now) {
+	if !s.saveLimit.allow(edge.SessionID(r.Context()), 1, now) || !s.saveLimitIP.allow(edge.ClientKey(r), 1, now) {
 		http.Error(w, "saving too often, try again in a minute", http.StatusTooManyRequests)
 		return
 	}
 	var uid int64
 	var stored int64
 	s.q.View(r.Context(), func(rd *queries.Reader) error {
-		if u, _ := rd.SessionUser(r.Context(), sessionID(r)); u != nil {
+		if u, _ := rd.SessionUser(r.Context(), edge.SessionID(r.Context())); u != nil {
 			uid = u.ID
 		}
 		stored, _ = rd.SnippetBytes(r.Context())
@@ -436,7 +436,7 @@ func (s *Server) cmdSnippet(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.catalog.Get(p.Component); !ok {
 		p.Component = ""
 	}
-	s.send(w, r, commands.SaveSnippet{SID: sessionID(r), TabID: p.TabID, ID: snippetID(), Files: p.Files, Component: p.Component, UserID: uid})
+	s.send(w, r, commands.SaveSnippet{SID: edge.SessionID(r.Context()), TabID: p.TabID, ID: snippetID(), Files: p.Files, Component: p.Component, UserID: uid})
 }
 
 // snippetJSON is the public, read-only form of a snippet (used by the

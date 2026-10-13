@@ -6,7 +6,7 @@ import (
 	"strings"
 	"sync"
 
-	"starbase/internal/precompress"
+	"github.com/zweiundeins/lith/edge"
 )
 
 // Size is what a file (or a group of files) weighs over the wire. Min is
@@ -59,15 +59,15 @@ func (s Sizes) LazyMin() int {
 	return n
 }
 
-// compressed measures b the way it is served: precompress keeps the brotli
-// and gzip bytes it computes here, so the server sends exactly these.
+// compressed measures b the way it is served: edge.Precompress keeps the
+// brotli and gzip bytes it computes here, so the server sends exactly these.
 func compressed(b []byte) Size {
-	br, gz := precompress.Get(b)
+	br, gz := edge.Precompress(b)
 	return Size{Raw: len(b), Gzip: len(gz), Brotli: len(br)}
 }
 
 func brotliLen(b []byte) int {
-	br, _ := precompress.Get(b)
+	br, _ := edge.Precompress(b)
 	return len(br)
 }
 

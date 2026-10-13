@@ -23,18 +23,19 @@ import (
 )
 
 type Server struct {
-	ctx     context.Context // cancelled on shutdown; ends the telemetry streams
-	cfg     config.Config
-	log     *slog.Logger
-	writer  *writer.Writer
-	hub     *live.Hub
-	q       *queries.Queries
-	catalog *catalog.Catalog
-	content fs.FS
-	assets  *assets
-	oauth   *oauthConfig
-	boot    string
-	secure  bool
+	ctx      context.Context // cancelled on shutdown; ends the telemetry streams
+	cfg      config.Config
+	log      *slog.Logger
+	writer   *writer.Writer
+	hub      *live.Hub
+	q        *queries.Queries
+	catalog  *catalog.Catalog
+	content  fs.FS
+	assets   *assets
+	oauth    *oauthConfig
+	boot     string
+	secure   bool
+	sessions edge.Sessions
 
 	cache        *renderCache // what pages render from the binary's content alone (rendercache.go)
 	previews     *previewCache
@@ -75,18 +76,20 @@ type Deps struct {
 }
 
 func New(ctx context.Context, d Deps) *Server {
+	secure := strings.HasPrefix(d.Config.BaseURL, "https://")
 	s := &Server{
-		ctx:     ctx,
-		cfg:     d.Config,
-		log:     d.Log,
-		writer:  d.Writer,
-		hub:     d.Hub,
-		q:       d.Queries,
-		catalog: d.Catalog,
-		content: d.Content,
-		assets:  newAssets(d.StaticFS, d.Catalog, d.Config.Dev),
-		boot:    strings.ToLower(randomToken(6)),
-		secure:  strings.HasPrefix(d.Config.BaseURL, "https://"),
+		ctx:      ctx,
+		cfg:      d.Config,
+		log:      d.Log,
+		writer:   d.Writer,
+		hub:      d.Hub,
+		q:        d.Queries,
+		catalog:  d.Catalog,
+		content:  d.Content,
+		assets:   newAssets(d.StaticFS, d.Catalog, d.Config.Dev),
+		boot:     strings.ToLower(randomToken(6)),
+		secure:   secure,
+		sessions: edge.Sessions{Secure: secure, Accept: legacySessionID.MatchString},
 
 		paintLimit:   newLimiter(20, 60), // pixels per second, burst
 		paintLimitIP: newLimiter(60, 180),
@@ -187,8 +190,8 @@ func (s *Server) Handler() http.Handler {
 
 	var h http.Handler = mux
 	h = s.sameOrigin(h)
-	h = s.session(h)
-	h = s.securityHeaders(h)
+	h = s.sessions.Handler(h)
+	h = edge.SecurityHeaders{Policy: s.csp, HSTS: s.secure}.Handler(h)
 	h = edge.Compress(h)
 	h = s.logRequests(h)
 	h = s.recoverer(h)

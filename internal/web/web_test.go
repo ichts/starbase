@@ -159,6 +159,35 @@ func TestDocumentHasNonceAndStream(t *testing.T) {
 	}
 }
 
+// Scripts load from the request's own origin's /static/ and /c/ only, and
+// inline ones by the nonce. A Host the policy can't name safely falls back to
+// BASE_URL.
+func TestContentSecurityPolicy(t *testing.T) {
+	ts, c := newServer(t)
+	for _, tc := range []struct{ host, origin string }{
+		{"", ts.URL},
+		{"localhost:8080", "http://localhost:8080"},
+		{"evil'host", ts.URL},
+	} {
+		req, _ := http.NewRequest("GET", ts.URL+"/about", nil)
+		if tc.host != "" {
+			req.Host = tc.host
+		}
+		res, err := c.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		want := regexp.MustCompile(`(^|; )script-src ` + regexp.QuoteMeta(tc.origin+"/static/ "+tc.origin+"/c/ ") + `'nonce-[A-Za-z0-9_-]{22}' 'unsafe-eval'(;|$)`)
+		if csp := res.Header.Get("Content-Security-Policy"); !want.MatchString(csp) {
+			t.Errorf("Host %q: %s", tc.host, csp)
+		}
+		if res.Header.Get("X-Frame-Options") != "DENY" {
+			t.Errorf("Host %q: X-Frame-Options %q", tc.host, res.Header.Get("X-Frame-Options"))
+		}
+	}
+}
+
 func TestCommandsRequireSameOrigin(t *testing.T) {
 	ts, c := newServer(t)
 	get(t, c, ts.URL+"/") // obtain a session cookie
@@ -697,6 +726,68 @@ func TestPrecompressedAssets(t *testing.T) {
 		res.Body.Close()
 		if res.Header.Get("Content-Encoding") != "br" || !bytes.Equal(got, want) || len(want) == 0 {
 			t.Errorf("%s: Content-Encoding %q, round trip ok=%v (%d bytes)", u, res.Header.Get("Content-Encoding"), bytes.Equal(got, want), len(want))
+		}
+	}
+	// A hashed static file is immutable, and a browser that asks again with
+	// its ETag gets a 304.
+	_, runner := get(t, client, ts.URL+"/playground/run")
+	u := regexp.MustCompile(`/static/vendor/datastar-rocket-[0-9a-f]+\.js`).FindString(runner)
+	req, _ := http.NewRequest("GET", ts.URL+u, nil)
+	req.Header.Set("Accept-Encoding", "br")
+	res, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if u == "" || res.Header.Get("Cache-Control") != "public, max-age=31536000, immutable" || res.Header.Get("ETag") == "" {
+		t.Fatalf("%q: Cache-Control %q, ETag %q", u, res.Header.Get("Cache-Control"), res.Header.Get("ETag"))
+	}
+	req.Header.Set("If-None-Match", res.Header.Get("ETag"))
+	if res, err = client.Do(req); err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusNotModified {
+		t.Errorf("If-None-Match with its ETag: %d", res.StatusCode)
+	}
+}
+
+// Every size a component's page shows is what the server sends: each file
+// under brotli and gzip, and its minified file under brotli.
+func TestSizesAreBytesServed(t *testing.T) {
+	ts, _, _, cat := newServerWriter(t)
+	client := &http.Client{Transport: &http.Transport{DisableCompression: true}}
+	served := func(u, coding string) int {
+		t.Helper()
+		req, _ := http.NewRequest("GET", ts.URL+u, nil)
+		req.Header.Set("Accept-Encoding", coding)
+		res, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		b, _ := io.ReadAll(res.Body)
+		if res.StatusCode != 200 || res.Header.Get("Content-Encoding") != coding {
+			t.Errorf("%s: %d, Content-Encoding %q, want %s", u, res.StatusCode, res.Header.Get("Content-Encoding"), coding)
+		}
+		return len(b)
+	}
+	for _, c := range cat.Components {
+		mins, err := cat.MinFiles(c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range c.Sizes.Files {
+			u := "/c/" + c.Slug + "@" + c.Hash + "/"
+			br, gz, min := served(u+f.Name, "br"), served(u+f.Name, "gzip"), 0
+			if _, ok := mins[catalog.MinPath(f.Name)]; ok {
+				min = served(u+catalog.MinPath(f.Name), "br")
+			} else {
+				min = br // already minified: it ships as it is
+			}
+			if br != f.Brotli || gz != f.Gzip || min != f.Min {
+				t.Errorf("%s/%s: served br %d, gzip %d, min %d; the table shows %d, %d, %d", c.Slug, f.Name, br, gz, min, f.Brotli, f.Gzip, f.Min)
+			}
 		}
 	}
 }

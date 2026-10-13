@@ -14,6 +14,7 @@ import (
 
 	"github.com/a-h/templ"
 	"github.com/starfederation/datastar-go/datastar"
+	"github.com/zweiundeins/lith/edge"
 	"github.com/zweiundeins/lith/live"
 	"github.com/zweiundeins/lith/sse"
 
@@ -67,7 +68,7 @@ func (s *Server) page(mux *http.ServeMux, pattern string, fn pageFunc, shared ..
 // load renders a page in rd's snapshot: the document's own read
 // transaction, or a render worker's.
 func (s *Server) load(ctx context.Context, rd *queries.Reader, req *http.Request, tabID string, fn pageFunc) (v view, user *model.User, err error) {
-	sid := sessionID(req)
+	sid := edge.SessionID(req.Context())
 	if user, err = rd.SessionUser(ctx, sid); err != nil {
 		return v, nil, err
 	}
@@ -104,7 +105,7 @@ func (s *Server) shell(req *http.Request, user *model.User, v view) ui.Shell {
 		RepoURL:      s.cfg.RepoURL,
 		BaseURL:      s.cfg.BaseURL,
 		Assets:       s.assets,
-		Nonce:        nonce(req),
+		Nonce:        edge.Nonce(req.Context()),
 		Boot:         s.boot,
 		Dev:          s.cfg.Dev,
 		LoadBundle:   s.assets.useBundle(req),
@@ -216,7 +217,7 @@ func (s *Server) stream(fn pageFunc, shared []live.View) http.HandlerFunc {
 		// The view renders on a render worker, also after this request has
 		// ended: it keeps the request's values, not its cancellation.
 		req := r.Clone(context.WithoutCancel(r.Context()))
-		sid := sessionID(r)
+		sid := edge.SessionID(r.Context())
 		tab := live.View{
 			Key:    "tab:" + sig.TabID,
 			Topics: []string{commands.SessionTopic(sid), commands.TabTopic(sig.TabID), commands.TopicAll},

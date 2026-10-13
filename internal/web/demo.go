@@ -82,9 +82,7 @@ func (s *Server) demoTelemetry(w http.ResponseWriter, r *http.Request) {
 	}
 	// Uncompressed: an event is 130 bytes, where an encoder would hold 430 KiB
 	// or more for as long as a page shows the telemetry.
-	plain := r.Clone(r.Context())
-	plain.Header.Del("Accept-Encoding")
-	stream, err := sse.Open(w, plain, sse.Options{})
+	stream, err := sse.Open(w, r, sse.Options{NoCompression: true})
 	if err != nil {
 		return
 	}

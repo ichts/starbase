@@ -16,6 +16,7 @@ import (
 
 	"github.com/starfederation/datastar-go/datastar"
 	"github.com/zweiundeins/lith/edge"
+	"github.com/zweiundeins/lith/sse"
 
 	"starbase/internal/demo"
 	"starbase/internal/queries"
@@ -405,8 +406,9 @@ func (s *Server) demoList(w http.ResponseWriter, r *http.Request) {
 	b.WriteString(`</sb-virtual-scroll>`)
 
 	w.Header().Set("Access-Control-Allow-Origin", "*") // public; used from the playground sandbox
-	sse := datastar.NewSSE(w, r, datastar.WithCompression(datastar.WithBrotli(datastar.WithBrotliLevel(5)), datastar.WithGzip()))
-	sse.PatchElements(b.String())
+	if stream, err := sse.Open(w, r, sse.Options{}); err == nil {
+		stream.CloseWith(sse.PatchElements([]byte(b.String())))
+	}
 }
 
 // demoListItem is item i: a line of the star catalog, or with cols > 0 a pixel

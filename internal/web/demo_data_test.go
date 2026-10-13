@@ -115,3 +115,29 @@ func TestDemoList(t *testing.T) {
 		}
 	}
 }
+
+// TestDemoListEndsItsStream: the list's answer ends its compressed stream in
+// every encoding, so a decoder reads it to the end without an error.
+func TestDemoListEndsItsStream(t *testing.T) {
+	ts, c := newServer(t)
+	for _, enc := range []string{"identity", "gzip", "br", "zstd"} {
+		req, _ := http.NewRequest(http.MethodGet, ts.URL+"/demo/data/list?id=stars&count=200", nil)
+		req.Header.Set("Datastar-Request", "true")
+		req.Header.Set("Accept-Encoding", enc)
+		res, err := c.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(decoded(t, res))
+		res.Body.Close()
+		if err != nil {
+			t.Errorf("%s: %v", enc, err)
+		}
+		if got := res.Header.Get("Content-Encoding"); got != strings.TrimPrefix(enc, "identity") {
+			t.Errorf("%s: Content-Encoding %q", enc, got)
+		}
+		if n := strings.Count(string(body), `role="listitem"`); !strings.HasPrefix(string(body), "event: datastar-patch-elements\n") || n != 200 {
+			t.Errorf("%s: %d items in\n%.300s", enc, n, body)
+		}
+	}
+}

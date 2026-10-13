@@ -54,7 +54,7 @@ The whole bar changes colour at the `warn` and `danger` thresholds, given in val
 </div>
 ```
 
-The endpoint is Go with the [Datastar SDK](https://data-star.dev/reference/sdks); any SDK works the same way. `TelemetryAt` computes the sample from the clock, so every viewer watches the same flight. When the server stops for a deploy, its last event replaces the hidden element by a copy, which opens the stream again, and `retry: 'error'` keeps asking until the next process answers:
+The endpoint is Go with the `sse` package of lith, Starbase's runtime; any [Datastar SDK](https://data-star.dev/reference/sdks) works the same way. `TelemetryAt` computes the sample from the clock, so every viewer watches the same flight. When the server stops for a deploy, its last event replaces the hidden element by a copy, which opens the stream again, and `retry: 'error'` keeps asking until the next process answers:
 
 ```go source=internal/web/demo.go#Server.demoTelemetry
 // demoTelemetry streams the demo mission as signal patches ($_tm): a pure
@@ -67,11 +67,21 @@ func (s *Server) demoTelemetry(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "the server is restarting", http.StatusServiceUnavailable)
 		return
 	}
-	stream := datastar.NewSSE(w, r)
+	// Uncompressed: an event is 130 bytes, where an encoder would hold 430 KiB
+	// or more for as long as a page shows the telemetry.
+	plain := r.Clone(r.Context())
+	plain.Header.Del("Accept-Encoding")
+	stream, err := sse.Open(w, plain, sse.Options{})
+	if err != nil {
+		return
+	}
+	var last [][]byte
+	defer func() { stream.CloseWith(last...) }()
 	tick := time.NewTicker(250 * time.Millisecond)
 	defer tick.Stop()
 	for {
-		if err := stream.MarshalAndPatchSignals(map[string]any{"_tm": TelemetryAt(time.Now())}); err != nil {
+		tm, _ := json.Marshal(map[string]any{"_tm": TelemetryAt(time.Now())})
+		if err := stream.Write(sse.PatchSignals(tm, false)); err != nil {
 			return
 		}
 		select {
@@ -79,7 +89,7 @@ func (s *Server) demoTelemetry(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			return
 		case <-s.ctx.Done():
-			w.Write(sse.Reconnect(ui.TelemetryID))
+			last = append(last, sse.Reconnect(ui.TelemetryID))
 			return
 		}
 	}

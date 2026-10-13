@@ -6,17 +6,23 @@ import "starbase/internal/catalog"
 var (
 	telemetryGo = catalog.Highlight(`// internal/web/demo.go: a query stream, no state, no database.
 func (s *Server) demoTelemetry(w http.ResponseWriter, r *http.Request) {
-	stream := datastar.NewSSE(w, r)
+	stream, err := sse.Open(w, r, sse.Options{})
+	if err != nil {
+		return
+	}
+	var last [][]byte
+	defer func() { stream.CloseWith(last...) }()
 	tick := time.NewTicker(250 * time.Millisecond)
 	for {
 		// A pure function of the clock: every viewer sees the same flight.
-		stream.MarshalAndPatchSignals(map[string]any{"_tm": TelemetryAt(time.Now())})
+		tm, _ := json.Marshal(map[string]any{"_tm": TelemetryAt(time.Now())})
+		stream.Write(sse.PatchSignals(tm, false))
 		select {
 		case <-tick.C:
 		case <-r.Context().Done():
 			return
 		case <-s.ctx.Done(): // a deploy: the page opens the stream again
-			w.Write(sse.Reconnect("telemetry"))
+			last = append(last, sse.Reconnect("telemetry"))
 			return
 		}
 	}

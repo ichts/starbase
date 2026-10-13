@@ -8,6 +8,7 @@ require (
 	github.com/andybalholm/brotli v1.2.6
 	github.com/benbjohnson/hashfs v0.2.2
 	github.com/evanw/esbuild v0.28.2
+	github.com/klauspost/compress v1.20.3
 	github.com/starfederation/datastar-go v1.2.2
 	github.com/tdewolff/minify/v2 v2.24.19
 	github.com/yuin/goldmark v1.8.6
@@ -105,7 +106,6 @@ require (
 	github.com/hashicorp/go-getter v1.8.10 // indirect
 	github.com/hashicorp/go-version v1.9.0 // indirect
 	github.com/joho/godotenv v1.5.1 // indirect
-	github.com/klauspost/compress v1.20.3 // indirect
 	github.com/klauspost/cpuid/v2 v2.4.0 // indirect
 	github.com/klauspost/pgzip v1.2.7 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.1 // indirect

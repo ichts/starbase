@@ -3,7 +3,9 @@ package web_test
 import (
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"context"
+	"fmt"
 	"html"
 	"io"
 	"net/http"
@@ -12,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/andybalholm/brotli"
+	"github.com/klauspost/compress/zstd"
 	"github.com/zweiundeins/lith/sse"
 
 	"starbase/internal/ui"
@@ -19,21 +23,22 @@ import (
 
 // TestStreamsAskToReconnectWhenTheServerStops: when the server stops (a
 // deploy), a tab's render stream and the telemetry end with sse.Reconnect for
-// the elements that opened them, and the stopping server answers new streams
-// with 503, which retry 'error' asks again.
+// the elements that opened them, in every encoding, and end their compressed
+// streams cleanly; the stopping server answers new streams with 503, which
+// retry 'error' asks again.
 func TestStreamsAskToReconnectWhenTheServerStops(t *testing.T) {
 	s := startServer(t)
 	get(t, s.c, s.ts.URL+"/") // a session
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	open := func(method, path, body string) *http.Response {
+	open := func(method, path, body, encoding string) *http.Response {
 		t.Helper()
 		req, _ := http.NewRequestWithContext(ctx, method, s.ts.URL+path, strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Datastar-Request", "true")
 		req.Header.Set("Sec-Fetch-Site", "same-origin")
-		req.Header.Set("Accept-Encoding", "identity")
+		req.Header.Set("Accept-Encoding", encoding)
 		res, err := s.c.Do(req)
 		if err != nil {
 			t.Fatal(err)
@@ -41,13 +46,24 @@ func TestStreamsAskToReconnectWhenTheServerStops(t *testing.T) {
 		t.Cleanup(func() { res.Body.Close() })
 		return res
 	}
-	streams := []struct {
+	type stream struct {
 		name string
 		body *bufio.Reader
 		want []byte
-	}{
-		{"render stream", bufio.NewReader(open(http.MethodPost, "/", `{"tabid":"tab12345"}`).Body), sse.Reconnect(ui.StreamID)},
-		{"telemetry", bufio.NewReader(open(http.MethodGet, "/demo/telemetry", "").Body), sse.Reconnect(ui.TelemetryID)},
+	}
+	var streams []stream
+	for i, enc := range []string{"identity", "gzip", "br", "zstd"} {
+		page := open(http.MethodPost, "/", fmt.Sprintf(`{"tabid":"tab1234%d"}`, i), enc)
+		if got := page.Header.Get("Content-Encoding"); got != strings.TrimPrefix(enc, "identity") {
+			t.Errorf("render stream for %s in %q", enc, got)
+		}
+		tm := open(http.MethodGet, "/demo/telemetry", "", enc)
+		if got := tm.Header.Get("Content-Encoding"); got != "" {
+			t.Errorf("telemetry for %s in %q, want it uncompressed: its events are smaller than an encoder's memory", enc, got)
+		}
+		streams = append(streams,
+			stream{"render stream in " + enc, bufio.NewReader(decoded(t, page)), sse.Reconnect(ui.StreamID)},
+			stream{"telemetry for " + enc, bufio.NewReader(decoded(t, tm)), sse.Reconnect(ui.TelemetryID)})
 	}
 	for _, st := range streams {
 		for { // the first event: the stream is under way
@@ -63,7 +79,7 @@ func TestStreamsAskToReconnectWhenTheServerStops(t *testing.T) {
 
 	s.stop()
 	for _, st := range streams {
-		rest, err := io.ReadAll(st.body)
+		rest, err := io.ReadAll(st.body) // to the end of the compressed stream
 		if err != nil {
 			t.Fatalf("%s: %v", st.name, err)
 		}
@@ -75,9 +91,37 @@ func TestStreamsAskToReconnectWhenTheServerStops(t *testing.T) {
 		{http.MethodPost, "/", `{"tabid":"tab67890"}`},
 		{http.MethodGet, "/demo/telemetry", ""},
 	} {
-		if res := open(r.method, r.path, r.body); res.StatusCode != http.StatusServiceUnavailable {
+		if res := open(r.method, r.path, r.body, "identity"); res.StatusCode != http.StatusServiceUnavailable {
 			t.Errorf("%s %s while stopping = %d, want 503", r.method, r.path, res.StatusCode)
 		}
+	}
+}
+
+// decoded is res's body through the decoder its Content-Encoding names. A
+// read past the last event fails unless the stream ended cleanly.
+func decoded(t *testing.T, res *http.Response) io.Reader {
+	t.Helper()
+	switch enc := res.Header.Get("Content-Encoding"); enc {
+	case "":
+		return res.Body
+	case "gzip":
+		d, err := gzip.NewReader(res.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d
+	case "br":
+		return brotli.NewReader(res.Body)
+	case "zstd":
+		d, err := zstd.NewReader(res.Body, zstd.WithDecoderConcurrency(1))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(d.Close)
+		return d
+	default:
+		t.Fatalf("Content-Encoding %q", enc)
+		return nil
 	}
 }
 

@@ -92,7 +92,7 @@ The header is part of the host's markup, so the server sends it with every windo
 
 ## Server side
 
-The handler behind these examples is Go with the [Datastar SDK](https://data-star.dev/reference/sdks); any SDK works the same way. `PatchElements` morphs the element with the id in the markup, and `demoListItem` renders a star's line or a pixel:
+The handler behind these examples is Go with the `sse` package of lith, Starbase's runtime; any [Datastar SDK](https://data-star.dev/reference/sdks) works the same way. `PatchElements` morphs the element with the id in the markup, and `demoListItem` renders a star's line or a pixel:
 
 ```go source=internal/web/demo_data.go#demoListKeep,Server.demoList
 // demoListKeep are the host attributes the page sets. This endpoint serves any
@@ -140,8 +140,9 @@ func (s *Server) demoList(w http.ResponseWriter, r *http.Request) {
 	b.WriteString(`</sb-virtual-scroll>`)
 
 	w.Header().Set("Access-Control-Allow-Origin", "*") // public; used from the playground sandbox
-	sse := datastar.NewSSE(w, r, datastar.WithCompression(datastar.WithBrotli(datastar.WithBrotliLevel(5)), datastar.WithGzip()))
-	sse.PatchElements(b.String())
+	if stream, err := sse.Open(w, r, sse.Options{}); err == nil {
+		stream.CloseWith(sse.PatchElements([]byte(b.String())))
+	}
 }
 ```
 

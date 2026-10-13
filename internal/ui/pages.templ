@@ -413,7 +413,7 @@ templ Board(v BoardView) {
 		<span class="board-stats" aria-live="polite">
 			<span class="board-stats__dot" aria-hidden="true"></span>
 			@BoardViewers(v.Viewers)
-			{ " watching · " + itoa(int(v.Pixels)) + " pixels painted" }
+			{ "watching · " + itoa(int(v.Pixels)) + " pixels painted" }
 		</span>
 	</header>
 	<div id="board-grid" class="board-section__grid">

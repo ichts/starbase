@@ -23,6 +23,7 @@ import (
 
 	"starbase/components"
 	"starbase/content"
+	"starbase/internal/app"
 	"starbase/internal/catalog"
 	"starbase/internal/commands"
 	"starbase/internal/config"
@@ -226,7 +227,8 @@ func settle(n func() int64) {
 // BenchmarkShowcaseJoins opens 100 render streams on /showcase one after
 // another, each once its page has arrived, and reports the renders and read
 // transactions that took until they settled. Then it opens 100 more as
-// browsers that accept zstd and reports the heap each open stream holds.
+// browsers that accept zstd and reports the heap each open stream holds
+// with the app's stream options.
 //
 //	go test ./internal/web -run '^$' -bench ShowcaseJoins -benchtime 1x
 func BenchmarkShowcaseJoins(b *testing.B) {
@@ -247,7 +249,7 @@ func BenchmarkShowcaseJoins(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
-		hub := live.New(live.Options{Read: d.R, Log: log})
+		hub := live.New(app.HubOptions(d.R, log))
 		hubDone := make(chan struct{})
 		go func() { hub.Run(ctx); close(hubDone) }()
 		wr, err := writer.New(d, writer.Options{OnCommit: hub.Changed, Log: log})

@@ -5,12 +5,14 @@ package app
 
 import (
 	"context"
+	"database/sql"
 	"log/slog"
 	"net/http"
 	"path/filepath"
 	"time"
 
 	"github.com/zweiundeins/lith/live"
+	"github.com/zweiundeins/lith/sse"
 	"github.com/zweiundeins/lith/writer"
 
 	"starbase/components"
@@ -24,6 +26,24 @@ import (
 	"starbase/internal/web"
 	"starbase/static"
 )
+
+// Memory for deploy/starbase.service's MemoryMax=384M, measured on
+// 2026-10-13 with the production binary: 105 MiB idle after warm-up, plus
+// 1.1 MiB of heap per open stream on /showcase to 1.36 MiB on
+// /components/data-table (the largest frame) with zstd's low-memory
+// history, 1.7 to 1.95 MiB without it. 105 + 150 × 1.36 = 309 MiB, 80% of
+// MemoryMax; the rest is for the type check's compiler (about 60 MB).
+const maxStreams = 150
+
+// MemoryLimit is the GC's soft limit, which main sets unless GOMEMLIMIT is
+// set. Without it the heap grows to twice what is live: 150 streams took
+// 449 to 494 MiB while the board was painted, 247 to 263 MiB with it.
+const MemoryLimit = 256 << 20
+
+// HubOptions configure the render loop.
+func HubOptions(read *sql.DB, log *slog.Logger) live.Options {
+	return live.Options{Read: read, Log: log, MaxStreams: maxStreams, SSE: sse.Options{ZstdLowMemory: true}}
+}
 
 type App struct {
 	Handler http.Handler
@@ -52,7 +72,7 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error)
 	if err != nil {
 		return nil, err
 	}
-	hub := live.New(live.Options{Read: database.R, Log: log})
+	hub := live.New(HubOptions(database.R, log))
 	w, err := writer.New(database, writer.Options{OnCommit: hub.Changed, Log: log})
 	if err != nil {
 		database.Close()

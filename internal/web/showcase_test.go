@@ -3,8 +3,6 @@ package web_test
 import (
 	"bufio"
 	"context"
-	"database/sql"
-	"database/sql/driver"
 	"fmt"
 	"io"
 	"log/slog"
@@ -14,7 +12,6 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -115,71 +112,6 @@ func TestShowcaseViewers(t *testing.T) {
 	}
 }
 
-// countingConn counts the read transactions begun on a connection.
-type countingConn struct {
-	driver.Conn
-	begins *atomic.Int64
-}
-
-func (c countingConn) BeginTx(ctx context.Context, o driver.TxOptions) (driver.Tx, error) {
-	c.begins.Add(1)
-	return c.Conn.(driver.ConnBeginTx).BeginTx(ctx, o)
-}
-
-func (c countingConn) PrepareContext(ctx context.Context, q string) (driver.Stmt, error) {
-	return c.Conn.(driver.ConnPrepareContext).PrepareContext(ctx, q)
-}
-
-func (c countingConn) QueryContext(ctx context.Context, q string, args []driver.NamedValue) (driver.Rows, error) {
-	return c.Conn.(driver.QueryerContext).QueryContext(ctx, q, args)
-}
-
-func (c countingConn) ExecContext(ctx context.Context, q string, args []driver.NamedValue) (driver.Result, error) {
-	return c.Conn.(driver.ExecerContext).ExecContext(ctx, q, args)
-}
-
-func (c countingConn) ResetSession(ctx context.Context) error {
-	if r, ok := c.Conn.(driver.SessionResetter); ok {
-		return r.ResetSession(ctx)
-	}
-	return nil
-}
-
-type countingConnector struct {
-	dsn    string
-	drv    driver.Driver
-	begins *atomic.Int64
-}
-
-func (c countingConnector) Connect(context.Context) (driver.Conn, error) {
-	conn, err := c.drv.Open(c.dsn)
-	if err != nil {
-		return nil, err
-	}
-	return countingConn{conn, c.begins}, nil
-}
-
-func (c countingConnector) Driver() driver.Driver { return c.drv }
-
-// countingReadPool opens a read pool like the app's that counts its
-// transactions.
-func countingReadPool(b *testing.B, path string, conns int, begins *atomic.Int64) *sql.DB {
-	b.Helper()
-	pragmas := []string{"busy_timeout(5000)", "journal_mode(WAL)", "synchronous(NORMAL)", "foreign_keys(1)",
-		"temp_store(MEMORY)", "cache_size(-16000)", "query_only(1)", "mmap_size(268435456)"}
-	dsn := "file:" + path + "?_pragma=" + strings.Join(pragmas, "&_pragma=")
-	probe, err := sql.Open("sqlite", dsn)
-	if err != nil {
-		b.Fatal(err)
-	}
-	drv := probe.Driver()
-	probe.Close()
-	r := sql.OpenDB(countingConnector{dsn: dsn, drv: drv, begins: begins})
-	r.SetMaxOpenConns(conns)
-	r.SetMaxIdleConns(conns)
-	return r
-}
-
 // join opens a render stream on /showcase with accept as its
 // Accept-Encoding and waits for its first bytes, or with identity for its
 // page; then it reads the rest away until the stream ends.
@@ -241,10 +173,6 @@ func BenchmarkShowcaseJoins(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
-		var begins atomic.Int64
-		conns := d.R.Stats().MaxOpenConnections
-		d.R.Close()
-		d.R = countingReadPool(b, path, conns, &begins)
 		cat, err := catalog.Load(components.FS)
 		if err != nil {
 			b.Fatal(err)
@@ -279,8 +207,7 @@ func BenchmarkShowcaseJoins(b *testing.B) {
 		renders := func() int64 { return hub.Stats().Renders }
 
 		b.ResetTimer()
-		begins.Store(0)
-		r0 := renders()
+		r0, tx0 := renders(), hub.Stats().ReadTxs
 		joins, stop := context.WithCancel(ctx)
 		var wg sync.WaitGroup
 		for i := range streams {
@@ -288,7 +215,7 @@ func BenchmarkShowcaseJoins(b *testing.B) {
 		}
 		settle(renders)
 		b.ReportMetric(float64(renders()-r0), "renders")
-		b.ReportMetric(float64(begins.Load()), "readtx")
+		b.ReportMetric(float64(hub.Stats().ReadTxs-tx0), "readtx")
 		stop()
 		wg.Wait()
 		settle(func() int64 { return int64(hub.Stats().Streams) })

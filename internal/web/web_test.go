@@ -44,6 +44,21 @@ func newServer(t *testing.T) (*httptest.Server, *http.Client) {
 // newServerWriter also returns the writer and catalog, for tests that send commands.
 func newServerWriter(t *testing.T) (*httptest.Server, *http.Client, *writer.Writer, *catalog.Catalog) {
 	t.Helper()
+	s := startServer(t)
+	return s.ts, s.c, s.wr, s.cat
+}
+
+// testServer is the app in process, with a cookie jar for its client.
+type testServer struct {
+	ts  *httptest.Server
+	c   *http.Client
+	wr  *writer.Writer
+	cat *catalog.Catalog
+	hub *live.Hub
+}
+
+func startServer(t *testing.T) testServer {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -80,7 +95,7 @@ func newServerWriter(t *testing.T) (*httptest.Server, *http.Client, *writer.Writ
 	ts.Config.Handler = srv.Handler()
 	t.Cleanup(func() { cancel(); ts.Close() })
 	jar, _ := cookiejar.New(nil)
-	return ts, &http.Client{Jar: jar}, wr, cat
+	return testServer{ts: ts, c: &http.Client{Jar: jar}, wr: wr, cat: cat, hub: hub}
 }
 
 func get(t *testing.T, c *http.Client, url string) (*http.Response, string) {

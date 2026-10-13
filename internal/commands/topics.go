@@ -5,6 +5,10 @@ package commands
 // command that changes nothing a page shows touches none.
 const TopicAll = "all"
 
+// TopicBoard is the pixel board, which only the board's view on the
+// Showcase shows: a paint renders that view alone, once for all its viewers.
+const TopicBoard = "board"
+
 // SessionTopic is every page of one browser session: its preferences and
 // who is signed in.
 func SessionTopic(sid string) string { return "sid:" + sid }

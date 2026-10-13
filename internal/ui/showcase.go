@@ -32,7 +32,7 @@ func (s *Server) demoTelemetry(w http.ResponseWriter, r *http.Request) {
             data-attr:value="Math.round($_tm.fuel)"></sb-meter>
 </section>`, "html")
 
-	boardHTML = catalog.Highlight(`<!-- rendered by the server into every frame of the page's stream -->
+	boardHTML = catalog.Highlight(`<!-- rendered by the board's view, one frame for every viewer -->
 <sb-pixel-board id="board" size="48" cells="0000…5ff5…0d00"
   data-on:sb-paint="@post('/cmd/paint', {
     payload: {color: evt.detail.color, cells: evt.detail.cells},
@@ -41,7 +41,7 @@ func (s *Server) demoTelemetry(w http.ResponseWriter, r *http.Request) {
 
 	boardGo = catalog.Highlight(`// internal/commands/board.go: runs inside the single writer's batch.
 func (c PaintPixels) Apply(tx *writer.Tx) error {
-	tx.Touch(TopicAll) // every open page renders again once the batch commits
+	tx.Touch(TopicBoard) // the board's view renders again once the batch commits
 	for _, i := range c.Cells {
 		tx.Exec(`+"`"+`INSERT INTO board_cells (board, idx, color, painted_at)
 			VALUES (?, ?, ?, ?) ON CONFLICT (board, idx) DO UPDATE

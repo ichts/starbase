@@ -33,7 +33,7 @@ A grid of chunky pixels to paint on, with a 16-colour palette. It's built for **
 
 ### Server-driven (the Showcase board)
 
-This is the wiring the multiplayer board on the [Showcase](/showcase) page uses. The server renders `cells` into every frame of the page's render stream, and painting is a command:
+This is the wiring the multiplayer board on the [Showcase](/showcase) page uses. The server renders `cells` into every frame of the board's view, which every viewer's render stream carries, and painting is a command:
 
 ```html
 <sb-pixel-board id="board" size="48" cells="…rendered by the server…"
@@ -68,9 +68,8 @@ func (s *Server) cmdPaint(w http.ResponseWriter, r *http.Request) {
 ```
 
 ```go source=internal/commands/board.go#PaintPixels,PaintPixels.Validate,PaintPixels.Apply
-// PaintPixels paints cells of the shared board. It touches TopicAll: every
-// open page renders again (a page without the board renders the frame it
-// already sent, which goes nowhere).
+// PaintPixels paints cells of the shared board. It touches TopicBoard: the
+// board's view renders again, and no page does.
 type PaintPixels struct {
 	Board string
 	Color int
@@ -96,7 +95,7 @@ func (c PaintPixels) Validate() error {
 }
 
 func (c PaintPixels) Apply(tx *writer.Tx) error {
-	tx.Touch(TopicAll)
+	tx.Touch(TopicBoard)
 	now := time.Now().Unix()
 	for _, i := range c.Cells {
 		if _, err := tx.Exec(`

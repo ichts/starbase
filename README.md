@@ -131,7 +131,7 @@ POST /page           the tab's render stream (SSE, zstd or Brotli): the tab's vi
                      in the next tick (at most one per 50 ms) after a commit touches it
 POST /cmd/...        commands: validate → enqueue → 204. Never HTML.
                      single writer: drain queue → one transaction (savepoint per command)
-                     → commit → mark the views of the topics it touched (a tab, a session, or all)
+                     → commit → mark the views of the topics it touched (a tab, a session, the board, or all)
 ```
 
 - **Write side:** `internal/commands` (one struct per state change), applied by lith's writer.
@@ -141,7 +141,7 @@ POST /cmd/...        commands: validate → enqueue → 204. Never HTML.
 - **Catalog:** `components/` is embedded. At startup `SyncCatalog` mirrors it into SQLite (FTS5 for search).
 - **Design system:** `static/css`. Primitive `--sb-*` tokens feed semantic tokens, which feed components. Layers, container queries, nesting and OKLCH. Themes remap the semantic tokens only.
 - **Pixel art** is generated in Go (`internal/pixelart`) and served as cached SVG.
-- **Multiplayer pixel board** (Showcase): `sb-pixel-board` is driven by one server-owned attribute (`cells`, a hex digit per pixel) re-rendered in every stream frame. Painting is the `PaintPixels` command (`POST /cmd/paint`, rate-limited per session). A presence view that every viewer shares counts the viewers ("N watching").
+- **Multiplayer pixel board** (Showcase): `sb-pixel-board` is driven by one server-owned attribute (`cells`, a hex digit per pixel), which the board's own view renders once for every viewer. Painting is the `PaintPixels` command (`POST /cmd/paint`, rate-limited per session); it touches only the board, so no one's page renders. The board's view also counts the viewers ("N watching").
 - **Code playground:** `/playground` (and "Open in playground" on every component) edits a component's JS and HTML with `sb-code-editor` and `sb-code-playground`. Previews run in a `sandbox="allow-scripts allow-modals"` iframe served by `/playground/run`, with its own CSP and an opaque origin. A TypeScript switch turns `component.js` into `component.ts`, which the runner has the server transpile (`/playground/transpile`, esbuild). TypeScript, and JavaScript that starts with `// @ts-check`, is type-checked on the server against the patched Datastar build's declarations (`internal/tscheck`: TypeScript's native compiler, embedded in the binary and run as a subprocess) and underlined in the editor. "Save & share" is the `SaveSnippet` command (immutable `/playground?s=<id>` links). "Submit as component" prefills the issue form with that link, and the bot imports it (set the repository variable `STARBASE_URL`).
 - **Live demo data:** `GET /demo/telemetry` streams a simulated mission as signal patches (`$_tm`). It is a pure function of time, with no state. The Showcase page's Mission Control and the gauge, sparkline and meter docs use it.
 - **Example dataset:** a small universe (galaxies, star systems, planets, moons, bright stars by constellation), seeded into SQLite at startup (`internal/demo`, `SeedDemo`). Two generic, stateless endpoints serve it to any component's docs:

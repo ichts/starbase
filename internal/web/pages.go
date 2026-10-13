@@ -41,14 +41,15 @@ type view struct {
 // renderCtx is the input of a page render: one read snapshot plus who is
 // looking and what their tab state is.
 type renderCtx struct {
-	ctx   context.Context
-	r     *queries.Reader
-	req   *http.Request
-	sid   string
-	tabID string
-	user  *model.User
-	tab   model.TabState     // stored state, or seeded from the query string
-	prefs model.SessionPrefs // the session's preferences (known on the first GET too)
+	ctx    context.Context
+	r      *queries.Reader
+	req    *http.Request
+	sid    string
+	tabID  string
+	stream bool // for the tab's stream, where a region is a hole (region.go)
+	user   *model.User
+	tab    model.TabState     // stored state, or seeded from the query string
+	prefs  model.SessionPrefs // the session's preferences (known on the first GET too)
 }
 
 type pageFunc func(rc *renderCtx) (view, error)
@@ -58,11 +59,12 @@ var errNotFound = errors.New("not found")
 var tabIDRe = regexp.MustCompile(`^[a-z0-9]{8,32}$`)
 
 // page registers GET (document) and POST (render stream) for a pattern.
-// The page's streams also watch shared: views that all its viewers share,
-// such as the Showcase's viewer count.
-func (s *Server) page(mux *http.ServeMux, pattern string, fn pageFunc, shared ...live.View) {
+// The page's streams also watch the views of its regions, which all its
+// viewers share (the Showcase's board), given in the order the page shows
+// them.
+func (s *Server) page(mux *http.ServeMux, pattern string, fn pageFunc, regions ...*region) {
 	mux.HandleFunc("GET "+pattern, s.document(fn))
-	mux.HandleFunc("POST "+pattern, s.stream(fn, shared))
+	mux.HandleFunc("POST "+pattern, s.stream(fn, regions))
 }
 
 // load renders a page in rd's snapshot: the document's own read
@@ -83,7 +85,7 @@ func (s *Server) load(ctx context.Context, rd *queries.Reader, req *http.Request
 	if !ok { // a new page: its URL, and the session's default sort
 		tab = model.TabState{Browse: model.BrowseFromQuery(req.URL.Query(), prefs.DefaultSort())}
 	}
-	v, err = fn(&renderCtx{ctx: ctx, r: rd, req: req, sid: sid, tabID: tabID, user: user, tab: tab, prefs: prefs})
+	v, err = fn(&renderCtx{ctx: ctx, r: rd, req: req, sid: sid, tabID: tabID, stream: tabID != "", user: user, tab: tab, prefs: prefs})
 	return v, user, err
 }
 
@@ -194,9 +196,10 @@ func (s *Server) document(fn pageFunc) http.HandlerFunc {
 // stream is the read side of CQRS for one tab: a view of its own in the
 // render loop (lith/live), rendered again in the next tick after a commit
 // touches the tab's session, the tab, or everything. Every frame is the
-// whole #app; Datastar morphs the difference, and the stream's compressor
-// (lith/sse), keeping its window across frames, makes resending cheap.
-func (s *Server) stream(fn pageFunc, shared []live.View) http.HandlerFunc {
+// whole #app, with the page's regions filled in by the stream; Datastar
+// morphs the difference, and the stream's compressor (lith/sse), keeping
+// its window across frames, makes resending cheap.
+func (s *Server) stream(fn pageFunc, regions []*region) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var sig struct {
 			TabID string `json:"tabid"`
@@ -225,7 +228,14 @@ func (s *Server) stream(fn pageFunc, shared []live.View) http.HandlerFunc {
 				return s.frame(ctx, queries.Read(tx), req, sig.TabID, fn)
 			},
 		}
-		err := s.hub.Serve(w, r, live.Spec{ID: sig.TabID, Views: append([]live.View{tab}, shared...)})
+		spec := live.Spec{ID: sig.TabID, Views: []live.View{tab}}
+		for _, rg := range regions {
+			spec.Views = append(spec.Views, rg.view)
+		}
+		if len(regions) > 0 {
+			spec.WriteTick = fillHoles(tab.Key, regions)
+		}
+		err := s.hub.Serve(w, r, spec)
 		switch {
 		case errors.Is(err, live.ErrFull):
 			s.log.Warn("render stream refused: too many open", "path", r.URL.Path)

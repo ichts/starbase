@@ -336,7 +336,9 @@ type BoardView struct {
 // requests to the same URL by default), or fast strokes would lose pixels.
 const paintExpr = "@post('/cmd/paint', {payload: {color: evt.detail.color, cells: evt.detail.cells}, requestCancellation: 'disabled'})"
 
-templ Showcase(board BoardView, flight model.FlightPlan) {
+// Showcase lays out the Showcase's sections. board is the board's
+// changing part (Board), or in the tab's stream the hole its view fills.
+templ Showcase(board templ.Component, flight model.FlightPlan) {
 	@MissionControl()
 	@PixelBoard(board)
 	@FlightDemo(flight)
@@ -376,29 +378,15 @@ templ FlightDemo(f model.FlightPlan) {
 	</section>
 }
 
-// PixelBoard is server-owned: every frame of the page's render stream brings
-// the latest cells; painting is a command.
-templ PixelBoard(v BoardView) {
+// PixelBoard is the Showcase's board section around board, its changing
+// part: painting is a command, and the board's view brings the outcome.
+templ PixelBoard(board templ.Component) {
 	<section class="board-section" aria-labelledby="board-title">
-		<header class="mission__head">
-			<h2 id="board-title" class="section-title">Pixel Board</h2>
-			<span class="board-stats" aria-live="polite">
-				<span class="board-stats__dot" aria-hidden="true"></span>
-				@BoardViewers(v.Viewers)
-				{ " watching · " + itoa(int(v.Pixels)) + " pixels painted" }
-			</span>
-		</header>
-		<div class="board-section__grid">
-			<sb-pixel-board id="board" size={ itoa(v.Size) } cells={ v.Cells } data-on:sb-paint={ paintExpr }></sb-pixel-board>
-			<div class="board-section__about">
-				<p><strong>Paint together.</strong> Everyone on this page shares one 48×48 board. Pick a colour and drag.</p>
-				<p class="muted">Faded pixels are still in flight. About 20 pixels per second each, so everybody gets a turn.</p>
-			</div>
-		</div>
+		@board
 		<details class="howto" data-preserve-attr="open">
 			<summary>How it works</summary>
 			<div class="howto__body">
-				<p>This is the "one billion checkboxes" idea from Anders Murphy's hyperlith, done the way this whole site works: CQRS over one SQLite database, and the server re-rendering the entire page for every change.</p>
+				<p>This is the "one billion checkboxes" idea from Anders Murphy's hyperlith, done the way this whole site works: CQRS over one SQLite database, and the server rendering again whatever a change touched.</p>
 				<h3>1. The board is one attribute</h3>
 				<p>The state of all 2,304 pixels is one string on the element: <code>cells</code>, a hex digit (palette index) per pixel, row by row. The server renders it like any other markup. When a new frame morphs in, the attribute changes and the component repaints its canvas. The component never owns the board. It only draws what the server says, plus your own pixels in flight, drawn faded.</p>
 				@templ.Raw(boardHTML)
@@ -406,18 +394,38 @@ templ PixelBoard(v BoardView) {
 				<p>A stroke emits <code>sb-paint</code> every 80 ms, with the cells it crossed; fast drags are interpolated so there are no gaps. Each batch is a short <code>POST</code> that answers <code>204 No Content</code> and returns no HTML. <code>requestCancellation: 'disabled'</code> matters here: by default Datastar cancels an in-flight request when a new one goes to the same URL, which would drop pixels mid-stroke. A per-session token bucket (20 pixels per second, bursts up to 60) keeps any one painter from flooding the board.</p>
 				@templ.Raw(boardGo)
 				<p>A single writer goroutine drains the command queue. Everyone's strokes that arrive together are applied in one SQLite transaction, each in its own savepoint, and committed once.</p>
-				<h3>3. Every tab re-renders the whole page</h3>
-				<p>After the commit, the writer tells the render loop what the batch touched, and a paint touches every page. In its next tick (at most one every 50 ms, however many strokes came in) the loop renders every open tab's page again from a fresh read snapshot, one read transaction per render worker, and sends the entire page again. The encoded board is cached per version, so a thousand viewers cost one query. Pages whose output didn't change send nothing.</p>
-				<p>Sending the whole page sounds wasteful until you look at the wire. The stream is compressed with zstd (Brotli in browsers without it), and the compressor keeps its window across frames. A full frame of this page is <strong>about 31 KB</strong>; the first one compresses to about 8 KB, and after a paint each complete re-render costs <strong>about 20 bytes</strong>. There is no diffing code anywhere: Datastar morphs the DOM, and compression takes care of the network.</p>
+				<h3>3. One render for every viewer</h3>
+				<p>After the commit, the writer tells the render loop what the batch touched, and a paint touches only the board. The board (the header above and the canvas) is a view of its own that everyone on this page shares. In its next tick (at most one every 50 ms, however many strokes came in) the loop renders it once, from a fresh read snapshot, and sends the same frame to every viewer. The encoded board is cached per version, so the cells are read once after each paint, however many people load the page. No one's page renders. The rest of this page is your tab's own view, which renders when something of yours changes, such as the flight plan below. Its frames carry the board as the board's view last sent it, so the morph leaves the board alone.</p>
+				<p>Sending the whole board after every paint sounds wasteful until you look at the wire. The stream is compressed with zstd (Brotli in browsers without it), and the compressor keeps its window across frames. The board's frame is <strong>about 3 KB</strong>, and after a paint it costs <strong>about 40 bytes</strong> on the wire (about 20 with Brotli). There is no diffing code anywhere: Datastar morphs the DOM, and compression takes care of the network.</p>
 				<h3>4. Presence</h3>
-				<p>"Watching" counts the open render streams on this page. The number is a view of its own that every viewer shares: when someone joins or leaves, the render loop renders only that number again and sends it to every viewer.</p>
+				<p>"Watching" counts the open render streams on this page. The number is part of the board's view: when someone joins or leaves, the render loop renders the board again, once, and sends it to every viewer.</p>
 			</div>
 		</details>
 	</section>
 }
 
-// BoardViewers is the Showcase's viewer count, which the server also sends
-// on its own when someone joins or leaves.
+// Board is what changes on the pixel board: who is watching, the pixels
+// painted and the cells. The board's view renders it once for every
+// viewer, and every frame brings the latest cells.
+templ Board(v BoardView) {
+	<header id="board-head" class="mission__head">
+		<h2 id="board-title" class="section-title">Pixel Board</h2>
+		<span class="board-stats" aria-live="polite">
+			<span class="board-stats__dot" aria-hidden="true"></span>
+			@BoardViewers(v.Viewers)
+			{ " watching · " + itoa(int(v.Pixels)) + " pixels painted" }
+		</span>
+	</header>
+	<div id="board-grid" class="board-section__grid">
+		<sb-pixel-board id="board" size={ itoa(v.Size) } cells={ v.Cells } data-on:sb-paint={ paintExpr }></sb-pixel-board>
+		<div class="board-section__about">
+			<p><strong>Paint together.</strong> Everyone on this page shares one 48×48 board. Pick a colour and drag.</p>
+			<p class="muted">Faded pixels are still in flight. About 20 pixels per second each, so everybody gets a turn.</p>
+		</div>
+	</div>
+}
+
+// BoardViewers is the Showcase's viewer count.
 templ BoardViewers(n int) {
 	<span id="board-viewers">{ itoa(n) }</span>
 }

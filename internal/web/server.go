@@ -40,6 +40,7 @@ type Server struct {
 	cache        *renderCache // what pages render from the binary's content alone (rendercache.go)
 	previews     *previewCache
 	board        atomic.Pointer[boardCache]
+	boardRegion  *region  // the Showcase's board, a view of its own
 	paintLimit   *limiter // per session
 	paintLimitIP *limiter
 	saveLimit    *limiter // snippets, per session
@@ -113,6 +114,7 @@ func New(ctx context.Context, d Deps) *Server {
 	}
 	s.oauth = newOAuth(d.Config)
 	s.cache = newRenderCache(s)
+	s.boardRegion = s.newBoardRegion()
 	return s
 }
 
@@ -127,7 +129,7 @@ func (s *Server) Handler() http.Handler {
 	s.page(mux, "/themes", s.themesPage)
 	s.page(mux, "/contribute", s.contentPage("contribute", "contribute"))
 	s.page(mux, "/about", s.contentPage("about", "about"))
-	s.page(mux, "/showcase", s.showcasePage, s.boardViewers())
+	s.page(mux, "/showcase", s.showcasePage, s.boardRegion)
 	mux.Handle("GET /components", http.RedirectHandler("/", http.StatusMovedPermanently))
 	// The easiest way to contribute: a GitHub issue form, turned into a PR by a bot.
 	mux.HandleFunc("GET /submit", s.submit)

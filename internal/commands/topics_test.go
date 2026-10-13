@@ -48,6 +48,7 @@ func TestTopics(t *testing.T) {
 
 	sid, tab := "session1", "tab12345"
 	all, session, page := []string{commands.TopicAll}, []string{commands.SessionTopic(sid)}, []string{commands.TabTopic(tab)}
+	board := []string{commands.TopicBoard}
 	for i, tc := range []struct {
 		cmd  writer.Command
 		want []string
@@ -59,7 +60,7 @@ func TestTopics(t *testing.T) {
 		{commands.Star{UserID: 1, Slug: "alpha"}, all},
 		{commands.Star{UserID: 1, Slug: "alpha"}, nil}, // starred already
 		{commands.Unstar{UserID: 1, Slug: "alpha"}, all},
-		{commands.PaintPixels{Board: commands.BoardName, Color: 3, Cells: []int{0}}, all},
+		{commands.PaintPixels{Board: commands.BoardName, Color: 3, Cells: []int{0}}, board},
 		{commands.SetBrowseFilter{SID: sid, TabID: tab, Browse: model.Browse{Q: "x"}}, page},
 		{commands.SetFlight{SID: sid, TabID: tab, Name: "thrust", Value: "40"}, page},
 		{commands.SaveSnippet{SID: sid, TabID: tab, ID: "AbCd2345", Files: map[string]string{"component.js": "x"}}, page},

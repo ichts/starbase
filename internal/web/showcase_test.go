@@ -95,8 +95,9 @@ func until(t *testing.T, next func() string, want string) string {
 	return ""
 }
 
-// The Showcase's "N watching" is a view that its viewers share: a join or a
-// leave sends the others the count, not their whole page again.
+// The Showcase's "N watching" is part of the board's view, which its
+// viewers share: a join or a leave sends the others the board with the
+// count, not their whole page again.
 func TestShowcaseViewers(t *testing.T) {
 	ts, c := newServer(t)
 	if _, page := get(t, c, ts.URL+"/showcase"); !strings.Contains(page, `<span id="board-viewers">1</span> watching`) {
@@ -112,6 +113,85 @@ func TestShowcaseViewers(t *testing.T) {
 	leave()
 	if e := until(t, a, `<span id="board-viewers">1</span>`); strings.Contains(e, `id="app"`) {
 		t.Error("a leave sent the other viewer its whole page")
+	}
+}
+
+// stable waits until the hub has rendered nothing for 300 ms.
+func stable(t *testing.T, hub *live.Hub) {
+	t.Helper()
+	for last, still, end := hub.Stats().Renders, 0, time.Now().Add(5*time.Second); still < 6; time.Sleep(50 * time.Millisecond) {
+		if time.Now().After(end) {
+			t.Fatal("the hub kept rendering for 5 s")
+		}
+		if now := hub.Stats().Renders; now != last {
+			last, still = now, 0
+		} else {
+			still++
+		}
+	}
+}
+
+func paint(t *testing.T, c *http.Client, url string, color, cell int) {
+	t.Helper()
+	res := post(t, c, url+"/cmd/paint", fmt.Sprintf(`{"color":%d,"cells":[%d]}`, color, cell), "same-origin")
+	res.Body.Close()
+	if res.StatusCode != http.StatusNoContent {
+		t.Fatalf("paint: %s", res.Status)
+	}
+}
+
+// A paint renders the board's view alone, once for all its viewers: no
+// tab's view renders again, on the Showcase or elsewhere.
+func TestPaintRendersTheBoardAlone(t *testing.T) {
+	s := startServer(t)
+	get(t, s.c, s.ts.URL+"/showcase")
+	a, _ := openStream(t, s.c, s.ts.URL+"/showcase", "painta00")
+	b, _ := openStream(t, s.c, s.ts.URL+"/showcase", "paintb00")
+	about, _ := openStream(t, s.c, s.ts.URL+"/about", "paintc00")
+	for _, next := range []func() string{a, b, about} {
+		until(t, next, `id="app"`)
+	}
+	stable(t, s.hub)
+	before := s.hub.Stats().RendersByKey
+
+	paint(t, s.c, s.ts.URL, 7, 0)
+	for _, next := range []func() string{a, b} {
+		if e := until(t, next, "· 1 pixels painted"); strings.Contains(e, `id="app"`) {
+			t.Error("a paint sent a viewer its whole page")
+		}
+	}
+	stable(t, s.hub)
+	for key, n := range s.hub.Stats().RendersByKey {
+		want := int64(0)
+		if key == commands.TopicBoard {
+			want = 1
+		}
+		if got := n - before[key]; got != want {
+			t.Errorf("a paint rendered %s %d times, want %d", key, got, want)
+		}
+	}
+}
+
+// A frame of the tab's own view carries the board as the board's view
+// last sent it, so the morph of #app leaves the painted board as it is.
+func TestShowcaseFrameCarriesTheBoard(t *testing.T) {
+	s := startServer(t)
+	get(t, s.c, s.ts.URL+"/showcase")
+	next, _ := openStream(t, s.c, s.ts.URL+"/showcase", "frame000")
+	until(t, next, `id="app"`)
+	paint(t, s.c, s.ts.URL, 7, 0)
+	until(t, next, "· 1 pixels painted")
+
+	res := post(t, s.c, s.ts.URL+"/cmd/flight", `{"tabid":"frame000","name":"thrust","value":70}`, "same-origin")
+	res.Body.Close()
+	e := until(t, next, `id="app"`)
+	switch {
+	case !strings.Contains(e, "<dd>70%</dd>"):
+		t.Error("the tab's frame lacks the new thrust")
+	case strings.Contains(e, "<!--region:"):
+		t.Error("the tab's frame still has the board's hole")
+	case strings.Count(e, `id="board-head"`) != 1 || !strings.Contains(e, `cells="7`) || !strings.Contains(e, "· 1 pixels painted"):
+		t.Error("the tab's frame lacks the painted board")
 	}
 }
 

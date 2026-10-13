@@ -16,9 +16,8 @@ const (
 	MaxPaint  = 64 // cells per command
 )
 
-// PaintPixels paints cells of the shared board. It touches TopicAll: every
-// open page renders again (a page without the board renders the frame it
-// already sent, which goes nowhere).
+// PaintPixels paints cells of the shared board. It touches TopicBoard: the
+// board's view renders again, and no page does.
 type PaintPixels struct {
 	Board string
 	Color int
@@ -44,7 +43,7 @@ func (c PaintPixels) Validate() error {
 }
 
 func (c PaintPixels) Apply(tx *writer.Tx) error {
-	tx.Touch(TopicAll)
+	tx.Touch(TopicBoard)
 	now := time.Now().Unix()
 	for _, i := range c.Cells {
 		if _, err := tx.Exec(`

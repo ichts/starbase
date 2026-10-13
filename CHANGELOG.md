@@ -53,7 +53,7 @@ Ten new components, seven of them drag-and-drop and editing surfaces from derekr
 
 ### Changed
 
-- The server runs on lith, the runtime of our Go and SQLite apps: its writer batches the commands, and its render loop renders each changed page at most once every 50 ms, in one read transaction per render worker. Render streams are compressed with zstd where the browser takes it (Brotli otherwise) and hold less memory per open tab. On the Showcase, a viewer joining or leaving sends the others the new count, not their whole page.
+- The server runs on lith, the runtime of our Go and SQLite apps: its writer batches the commands, and its render loop renders each changed page at most once every 50 ms, in one read transaction per render worker. Render streams are compressed with zstd where the browser takes it (Brotli otherwise) and hold less memory per open tab. On the Showcase, the pixel board is a view of its own: a paint renders it once for everyone watching and renders no one's page (with 150 tabs open, one person painting took about 0.1 cores instead of 7 to 11), and a viewer joining or leaving sends the others the board with the new count, not their whole page.
 
 ### Fixed
 

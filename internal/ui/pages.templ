@@ -132,8 +132,8 @@ templ MissionControl() {
 		aria-labelledby="mission-title"
 		data-ignore-morph
 		data-signals="{_tm: {t: -8, stage: 'PAD', alt: 0, vel: 0, fuel: 100, temp: 18, pitch: 90}}"
-		data-init="@get('/demo/telemetry')"
 	>
+		<div id={ TelemetryID } hidden data-init={ telemetryInit }></div>
 		<header class="mission__head">
 			<h2 id="mission-title" class="section-title">Mission Control</h2>
 			<span class="mission__stage" data-text="$_tm.stage" data-attr:data-stage="$_tm.stage">PAD</span>
@@ -161,7 +161,7 @@ templ MissionControl() {
 			<div class="howto__body">
 				<p>The dashboard is built only from community components: <code>sb-starfield</code>, <code>sb-voxel</code>, <code>sb-gauge</code>, <code>sb-sparkline</code> and <code>sb-meter</code>. It contains no custom JavaScript. The server pushes data, signals carry it, and each component watches its attributes.</p>
 				<h3>1. The server streams signals</h3>
-				<p>The section opens one long-lived request with <code>{ "@get('/demo/telemetry')" }</code>. Four times a second the server sends a <code>datastar-patch-signals</code> event that merges fresh numbers into a single signal, <code>$_tm</code>. The data is a pure function of the clock over a 90-second mission, so the server keeps no state and every viewer watches the same flight. In CQRS terms this is a query stream: nothing is written, and hidden tabs close it and reopen it when they come back.</p>
+				<p>A hidden element in the section opens one long-lived request with <code>{ "@get('/demo/telemetry')" }</code>. Four times a second the server sends a <code>datastar-patch-signals</code> event that merges fresh numbers into a single signal, <code>$_tm</code>. The data is a pure function of the clock over a 90-second mission, so the server keeps no state and every viewer watches the same flight. In CQRS terms this is a query stream: nothing is written, and hidden tabs close it and reopen it when they come back. When the server restarts for a deploy, its last event replaces that element by a copy, which opens the request again, and <code>retry: 'error'</code> keeps asking until the new process answers.</p>
 				@templ.Raw(telemetryGo)
 				<h3>2. Signals drive attributes</h3>
 				<p>Each component is wired with <code>data-attr</code>. When <code>$_tm</code> changes, Datastar updates exactly the attributes that depend on it. Expressions can reshape the data on the way: the starfield's speed is derived from velocity, and warp switches on above 5 km/s.</p>

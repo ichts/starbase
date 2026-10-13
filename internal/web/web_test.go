@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"html"
 	"io"
 	"log/slog"
 	"net/http"
@@ -50,11 +51,12 @@ func newServerWriter(t *testing.T) (*httptest.Server, *http.Client, *writer.Writ
 
 // testServer is the app in process, with a cookie jar for its client.
 type testServer struct {
-	ts  *httptest.Server
-	c   *http.Client
-	wr  *writer.Writer
-	cat *catalog.Catalog
-	hub *live.Hub
+	ts   *httptest.Server
+	c    *http.Client
+	wr   *writer.Writer
+	cat  *catalog.Catalog
+	hub  *live.Hub
+	stop context.CancelFunc // as SIGTERM: the hub, the writer and the telemetry stop
 }
 
 func startServer(t *testing.T) testServer {
@@ -95,7 +97,7 @@ func startServer(t *testing.T) testServer {
 	ts.Config.Handler = srv.Handler()
 	t.Cleanup(func() { cancel(); ts.Close() })
 	jar, _ := cookiejar.New(nil)
-	return testServer{ts: ts, c: &http.Client{Jar: jar}, wr: wr, cat: cat, hub: hub}
+	return testServer{ts: ts, c: &http.Client{Jar: jar}, wr: wr, cat: cat, hub: hub, stop: cancel}
 }
 
 func get(t *testing.T, c *http.Client, url string) (*http.Response, string) {
@@ -166,8 +168,12 @@ func TestDocumentHasNonceAndStream(t *testing.T) {
 	if !strings.Contains(body, `<script type="importmap" nonce="`+m[1]+`">`) {
 		t.Error("import map does not carry the CSP nonce")
 	}
-	if !strings.Contains(body, `data-init="@post(location.pathname + location.search`) {
-		t.Error("page does not open its render stream")
+	// sse.Reconnect replaces the element that opens the stream by a copy.
+	if i := strings.Index(body, "<body"); i < 0 || strings.Contains(body[i:i+strings.Index(body[i:], ">")], "data-init") {
+		t.Error("the body opens the render stream: a reconnect would copy the whole page")
+	}
+	if !strings.Contains(html.UnescapeString(body), `<div id="stream" hidden data-init="@post(location.pathname + location.search, {retry: 'error', retryMaxCount: Infinity,`) {
+		t.Error("page does not open its render stream from #stream with retry 'error'")
 	}
 	if strings.Contains(body, "/dev/reload") {
 		t.Error("dev reload leaked into a non-dev build")

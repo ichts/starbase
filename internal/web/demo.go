@@ -6,6 +6,9 @@ import (
 	"time"
 
 	"github.com/starfederation/datastar-go/datastar"
+	"github.com/zweiundeins/lith/sse"
+
+	"starbase/internal/ui"
 )
 
 // Telemetry is one sample of the demo mission.
@@ -68,14 +71,20 @@ func demoPreflight(w http.ResponseWriter, r *http.Request) {
 }
 
 // demoTelemetry streams the demo mission as signal patches ($_tm): a pure
-// query stream, no commands, no database.
+// query stream, no commands, no database. When the server stops (a deploy),
+// the last event asks the page to open it again from #telemetry.
 func (s *Server) demoTelemetry(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*") // public; used from the playground sandbox
-	sse := datastar.NewSSE(w, r)
+	if s.ctx.Err() != nil {
+		// Stopping: the page retries the 503 until the next process answers.
+		http.Error(w, "the server is restarting", http.StatusServiceUnavailable)
+		return
+	}
+	stream := datastar.NewSSE(w, r)
 	tick := time.NewTicker(250 * time.Millisecond)
 	defer tick.Stop()
 	for {
-		if err := sse.MarshalAndPatchSignals(map[string]any{"_tm": TelemetryAt(time.Now())}); err != nil {
+		if err := stream.MarshalAndPatchSignals(map[string]any{"_tm": TelemetryAt(time.Now())}); err != nil {
 			return
 		}
 		select {
@@ -83,6 +92,7 @@ func (s *Server) demoTelemetry(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			return
 		case <-s.ctx.Done():
+			w.Write(sse.Reconnect(ui.TelemetryID))
 			return
 		}
 	}

@@ -228,7 +228,7 @@ func (s *Server) stream(fn pageFunc, regions []*region) http.HandlerFunc {
 				return s.frame(ctx, queries.Read(tx), req, sig.TabID, fn)
 			},
 		}
-		spec := live.Spec{ID: sig.TabID, Views: []live.View{tab}}
+		spec := live.Spec{ID: sig.TabID, Views: []live.View{tab}, Reconnect: ui.StreamID}
 		for _, rg := range regions {
 			spec.Views = append(spec.Views, rg.view)
 		}

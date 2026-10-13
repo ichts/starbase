@@ -82,11 +82,23 @@ func importMap(a Assets) string {
 	return string(b)
 }
 
+// StreamID is the element that opens the tab's render stream, and the
+// stream's live.Spec.Reconnect: on a deploy, the stream's last event copies
+// the element, and the copy's data-init opens the stream on the next process.
+const StreamID = "stream"
+
 // streamInit opens this tab's render stream: a long-lived POST to the page's
-// own URL. retry 'always' reconnects even when the stream ends cleanly (a
-// server restart or deploy closes it without an error); hidden tabs release
-// the connection and re-open (with a fresh render) when visible again.
-const streamInit = `@post(location.pathname + location.search, {retry: 'always', retryMaxCount: Infinity, retryInterval: 400, retryMaxWait: 4000, openWhenHidden: false})`
+// own URL. retry 'error' keeps asking through a restart's 502s and 503s, and
+// a stream the server ends stays closed; hidden tabs release the connection
+// and re-open (with a fresh render) when visible again.
+const streamInit = `@post(location.pathname + location.search, {retry: 'error', retryMaxCount: Infinity, retryInterval: 400, retryMaxWait: 4000, openWhenHidden: false})`
+
+// TelemetryID is the element that opens /demo/telemetry: the stream names it
+// in its last event when the server stops, like StreamID.
+const TelemetryID = "telemetry"
+
+// telemetryInit opens Mission Control's telemetry, like the docs examples.
+const telemetryInit = `@get('/demo/telemetry', {retry: 'error', retryMaxCount: Infinity})`
 
 // searchFromAnywhere sends typing on non-gallery pages to the gallery.
 const searchFromAnywhere = `el.value.trim() && (window.location.href = '/?q=' + encodeURIComponent(el.value.trim()))`

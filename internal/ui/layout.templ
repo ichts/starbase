@@ -61,7 +61,8 @@ templ Document(s Shell, body templ.Component) {
 				<script type="module" src={ s.Assets.Components() }></script>
 			}
 		</head>
-		<body data-signals={ s.Signals } data-init={ streamInit }>
+		<body data-signals={ s.Signals }>
+			<div id={ StreamID } hidden data-init={ streamInit }></div>
 			@App(s, body)
 		</body>
 	</html>

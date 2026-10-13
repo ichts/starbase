@@ -48,23 +48,30 @@ The whole bar changes colour at the `warn` and `danger` thresholds, given in val
 ### Live from the server
 
 ```html preview
-<div data-signals="{_tm: {fuel: 100}}" data-init="@get('/demo/telemetry')" style="inline-size: min(100%, 22rem)">
+<div data-signals="{_tm: {fuel: 100}}" style="inline-size: min(100%, 22rem)">
+  <div id="telemetry" hidden data-init="@get('/demo/telemetry', {retry: 'error', retryMaxCount: Infinity})"></div>
   <sb-meter label="Fuel" unit="%" warn="30" danger="15" segments="20" data-attr:value="Math.round($_tm.fuel)" data-preserve-attr="value"></sb-meter>
 </div>
 ```
 
-The endpoint is Go with the [Datastar SDK](https://data-star.dev/reference/sdks); any SDK works the same way. `TelemetryAt` computes the sample from the clock, so every viewer watches the same flight:
+The endpoint is Go with the [Datastar SDK](https://data-star.dev/reference/sdks); any SDK works the same way. `TelemetryAt` computes the sample from the clock, so every viewer watches the same flight. When the server stops for a deploy, its last event replaces the hidden element by a copy, which opens the stream again, and `retry: 'error'` keeps asking until the next process answers:
 
 ```go source=internal/web/demo.go#Server.demoTelemetry
 // demoTelemetry streams the demo mission as signal patches ($_tm): a pure
-// query stream, no commands, no database.
+// query stream, no commands, no database. When the server stops (a deploy),
+// the last event asks the page to open it again from #telemetry.
 func (s *Server) demoTelemetry(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*") // public; used from the playground sandbox
-	sse := datastar.NewSSE(w, r)
+	if s.ctx.Err() != nil {
+		// Stopping: the page retries the 503 until the next process answers.
+		http.Error(w, "the server is restarting", http.StatusServiceUnavailable)
+		return
+	}
+	stream := datastar.NewSSE(w, r)
 	tick := time.NewTicker(250 * time.Millisecond)
 	defer tick.Stop()
 	for {
-		if err := sse.MarshalAndPatchSignals(map[string]any{"_tm": TelemetryAt(time.Now())}); err != nil {
+		if err := stream.MarshalAndPatchSignals(map[string]any{"_tm": TelemetryAt(time.Now())}); err != nil {
 			return
 		}
 		select {
@@ -72,6 +79,7 @@ func (s *Server) demoTelemetry(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			return
 		case <-s.ctx.Done():
+			w.Write(sse.Reconnect(ui.TelemetryID))
 			return
 		}
 	}

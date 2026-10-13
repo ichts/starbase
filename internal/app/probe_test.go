@@ -55,7 +55,19 @@ func probeFull(t *testing.T, host, path, script string, handlers func(app http.H
 	if handlers != nil {
 		extra = handlers(a.Handler)
 	}
+	results := serveProbe(t, ln, path, script, a.Handler, extra)
+	if host != "" {
+		// HttpsUpgrades would try https://<host> first.
+		chromeArgs = append([]string{"--host-resolver-rules=MAP " + host + " 127.0.0.1", "--disable-features=HttpsUpgrades"}, chromeArgs...)
+	}
+	return a, runChrome(t, chrome, base+path, results, chromeArgs...)
+}
 
+// serveProbe serves h on ln for Chrome: the page at path with script added,
+// the probe's own endpoints, and extra handlers by path before h's. It
+// returns the channel that gets what the script posts.
+func serveProbe(t *testing.T, ln net.Listener, path, script string, h http.Handler, extra map[string]http.HandlerFunc) <-chan []byte {
+	t.Helper()
 	var once sync.Once
 	results := make(chan []byte, 1)
 	release := make(chan struct{})
@@ -74,16 +86,16 @@ func probeFull(t *testing.T, host, path, script string, handlers func(app http.H
 			once.Do(func() { results <- body; close(release) })
 		case page:
 			if r.Method != http.MethodGet {
-				a.Handler.ServeHTTP(w, r)
+				h.ServeHTTP(w, r)
 				return
 			}
-			h := http.Handler(a.Handler)
+			ph := h
 			if x := extra[page]; x != nil { // a test's own page, which gets the script too
-				h = x
+				ph = x
 			}
 			r.Header.Del("Accept-Encoding")
 			rec := httptest.NewRecorder()
-			h.ServeHTTP(rec, r)
+			ph.ServeHTTP(rec, r)
 			for k, v := range rec.Header() {
 				if k != "Content-Security-Policy" && k != "Content-Length" {
 					w.Header()[k] = v
@@ -93,8 +105,8 @@ func probeFull(t *testing.T, host, path, script string, handlers func(app http.H
 			doc := strings.Replace(rec.Body.String(), "</body>", inject+"</body>", 1)
 			w.Write([]byte(doc))
 		default:
-			if h := extra[r.URL.Path]; h != nil {
-				h(w, r)
+			if f := extra[r.URL.Path]; f != nil {
+				f(w, r)
 				return
 			}
 			if strings.HasPrefix(r.URL.Path, "/demo/arrange/") { // a demo's delay is for readers; tests hold answers themselves
@@ -102,16 +114,12 @@ func probeFull(t *testing.T, host, path, script string, handlers func(app http.H
 				q.Del("delay")
 				r.URL.RawQuery = q.Encode()
 			}
-			a.Handler.ServeHTTP(w, r)
+			h.ServeHTTP(w, r)
 		}
 	})}
 	go srv.Serve(ln)
 	t.Cleanup(func() { srv.Close() })
-	if host != "" {
-		// HttpsUpgrades would try https://<host> first.
-		chromeArgs = append([]string{"--host-resolver-rules=MAP " + host + " 127.0.0.1", "--disable-features=HttpsUpgrades"}, chromeArgs...)
-	}
-	return a, runChrome(t, chrome, base+path, results, chromeArgs...)
+	return results
 }
 
 func findChrome(t *testing.T) string {
@@ -142,13 +150,10 @@ func startApp(t *testing.T, host string) (*app.App, string, net.Listener) {
 		_, port, _ := net.SplitHostPort(ln.Addr().String())
 		base = "http://" + net.JoinHostPort(host, port)
 	}
-	cfg := config.Load()
-	cfg.BaseURL = base
-	cfg.DBPath = filepath.Join(t.TempDir(), "db.sqlite")
-	cfg.GitHubClientID, cfg.GitHubClientSecret = "", ""
-	copySeeded(t, cfg.DBPath)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
+	cfg := appConfig(t, base)
+	copySeeded(t, cfg.DBPath)
 	a, err := app.New(ctx, cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
@@ -208,6 +213,15 @@ func copySeeded(t *testing.T, path string) {
 			t.Fatal(err)
 		}
 	}
+}
+
+// appConfig is the app's configuration for base, with a database of its own.
+func appConfig(t *testing.T, base string) config.Config {
+	cfg := config.Load()
+	cfg.BaseURL = base
+	cfg.DBPath = filepath.Join(t.TempDir(), "db.sqlite")
+	cfg.GitHubClientID, cfg.GitHubClientSecret = "", ""
+	return cfg
 }
 
 // runChrome loads url in headless Chrome, with extra flags, and returns what

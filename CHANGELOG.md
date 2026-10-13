@@ -36,6 +36,7 @@ All notable changes to this project are documented here. The format follows
 - `sb-dropdown`: its caret and its submenu arrows follow `--sb-notch`. At 0 they are plain triangles, and the caret turns smoothly instead of in two steps.
 - `sb-date-picker`: its paging arrows follow `--sb-notch`. At 0 they are plain triangles instead of stepped pixel ones.
 - `sb-select`: its arrow and its loading spinner follow `--sb-notch`. At 0 the arrow is a plain triangle and the spinner a ring turning smoothly, instead of the stepped pixel ones.
+- After a deploy, Mission Control and the live examples in the gauge, meter and sparkline docs stood still until the page was reloaded. When the server restarts, it now asks each page to open its streams again, and a stream it ends for another reason stays closed.
 
 ## [0.7.0] - 2026-10-07
 

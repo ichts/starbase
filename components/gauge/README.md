@@ -44,24 +44,31 @@ A half-dial drawn in pixels. The needle eases toward `value` on a slightly bounc
 This site's demo endpoint streams telemetry as signal patches. The gauge follows `$_tm.vel` without any client code.
 
 ```html preview
-<div data-signals="{_tm: {vel: 0, temp: 18}}" data-init="@get('/demo/telemetry')" style="display: flex; gap: 32px; flex-wrap: wrap">
+<div data-signals="{_tm: {vel: 0, temp: 18}}" style="display: flex; gap: 32px; flex-wrap: wrap">
+  <div id="telemetry" hidden data-init="@get('/demo/telemetry', {retry: 'error', retryMaxCount: Infinity})"></div>
   <sb-gauge label="Velocity" unit=" km/s" max="8" warn="9" danger="10" decimals="2" data-attr:value="$_tm.vel" data-preserve-attr="value"></sb-gauge>
   <sb-gauge label="Hull" unit="°C" max="1200" warn="800" danger="1000" data-attr:value="$_tm.temp" data-preserve-attr="value"></sb-gauge>
 </div>
 ```
 
-The endpoint is Go with the [Datastar SDK](https://data-star.dev/reference/sdks); any SDK works the same way. `TelemetryAt` computes the sample from the clock, so every viewer watches the same flight:
+The endpoint is Go with the [Datastar SDK](https://data-star.dev/reference/sdks); any SDK works the same way. `TelemetryAt` computes the sample from the clock, so every viewer watches the same flight. When the server stops for a deploy, its last event replaces the hidden element by a copy, which opens the stream again, and `retry: 'error'` keeps asking until the next process answers:
 
 ```go source=internal/web/demo.go#Server.demoTelemetry
 // demoTelemetry streams the demo mission as signal patches ($_tm): a pure
-// query stream, no commands, no database.
+// query stream, no commands, no database. When the server stops (a deploy),
+// the last event asks the page to open it again from #telemetry.
 func (s *Server) demoTelemetry(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*") // public; used from the playground sandbox
-	sse := datastar.NewSSE(w, r)
+	if s.ctx.Err() != nil {
+		// Stopping: the page retries the 503 until the next process answers.
+		http.Error(w, "the server is restarting", http.StatusServiceUnavailable)
+		return
+	}
+	stream := datastar.NewSSE(w, r)
 	tick := time.NewTicker(250 * time.Millisecond)
 	defer tick.Stop()
 	for {
-		if err := sse.MarshalAndPatchSignals(map[string]any{"_tm": TelemetryAt(time.Now())}); err != nil {
+		if err := stream.MarshalAndPatchSignals(map[string]any{"_tm": TelemetryAt(time.Now())}); err != nil {
 			return
 		}
 		select {
@@ -69,6 +76,7 @@ func (s *Server) demoTelemetry(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			return
 		case <-s.ctx.Done():
+			w.Write(sse.Reconnect(ui.TelemetryID))
 			return
 		}
 	}

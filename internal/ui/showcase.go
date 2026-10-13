@@ -6,22 +6,26 @@ import "starbase/internal/catalog"
 var (
 	telemetryGo = catalog.Highlight(`// internal/web/demo.go: a query stream, no state, no database.
 func (s *Server) demoTelemetry(w http.ResponseWriter, r *http.Request) {
-	sse := datastar.NewSSE(w, r)
+	stream := datastar.NewSSE(w, r)
 	tick := time.NewTicker(250 * time.Millisecond)
 	for {
 		// A pure function of the clock: every viewer sees the same flight.
-		sse.MarshalAndPatchSignals(map[string]any{"_tm": TelemetryAt(time.Now())})
+		stream.MarshalAndPatchSignals(map[string]any{"_tm": TelemetryAt(time.Now())})
 		select {
 		case <-tick.C:
 		case <-r.Context().Done():
+			return
+		case <-s.ctx.Done(): // a deploy: the page opens the stream again
+			w.Write(sse.Reconnect("telemetry"))
 			return
 		}
 	}
 }`, "go")
 
 	telemetryHTML = catalog.Highlight(`<section data-ignore-morph
-  data-signals="{_tm: {alt: 0, vel: 0, fuel: 100, temp: 18, pitch: 90}}"
-  data-init="@get('/demo/telemetry')">
+  data-signals="{_tm: {alt: 0, vel: 0, fuel: 100, temp: 18, pitch: 90}}">
+  <div id="telemetry" hidden
+       data-init="@get('/demo/telemetry', {retry: 'error', retryMaxCount: Infinity})"></div>
 
   <sb-starfield data-attr:speed="Math.round(3 + $_tm.vel * 11)"
                 data-attr:warp="$_tm.vel > 5"></sb-starfield>

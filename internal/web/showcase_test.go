@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -112,11 +115,11 @@ func TestShowcaseViewers(t *testing.T) {
 	}
 }
 
-// join opens a render stream on /showcase with accept as its
-// Accept-Encoding and waits for its first bytes, or with identity for its
-// page; then it reads the rest away until the stream ends.
-func join(b *testing.B, ctx context.Context, client *http.Client, url, tabID, accept string, wg *sync.WaitGroup) {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, url+"/showcase", strings.NewReader(`{"tabid":"`+tabID+`"}`))
+// join opens a render stream on path with accept as its Accept-Encoding
+// and waits for its first bytes, or with identity for its page; then it
+// reads the rest away until the stream ends.
+func join(b *testing.B, ctx context.Context, client *http.Client, url, path, tabID, accept string, wg *sync.WaitGroup) {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, url+path, strings.NewReader(`{"tabid":"`+tabID+`"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Datastar-Request", "true")
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
@@ -124,6 +127,9 @@ func join(b *testing.B, ctx context.Context, client *http.Client, url, tabID, ac
 	res, err := client.Do(req)
 	if err != nil {
 		b.Fatal(err)
+	}
+	if res.StatusCode != http.StatusOK {
+		b.Fatalf("%s %s: %s", path, tabID, res.Status)
 	}
 	br := bufio.NewReaderSize(res.Body, 4096)
 	if accept == "identity" {
@@ -156,6 +162,66 @@ func settle(n func() int64) {
 	}
 }
 
+// benchApp is the app in process for a benchmark, with the board seeded
+// and the hub on app.HubOptions.
+type benchApp struct {
+	ctx     context.Context
+	url     string
+	hub     *live.Hub
+	catalog *catalog.Catalog
+	client  *http.Client // for up to streams streams at once
+	stop    func(streams *sync.WaitGroup)
+}
+
+func startBench(b *testing.B, streams int) *benchApp {
+	ctx, cancel := context.WithCancel(context.Background())
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	d, err := db.Open(ctx, filepath.Join(b.TempDir(), "bench.db"))
+	if err != nil {
+		b.Fatal(err)
+	}
+	cat, err := catalog.Load(components.FS)
+	if err != nil {
+		b.Fatal(err)
+	}
+	hub := live.New(app.HubOptions(d.R, log))
+	hubDone := make(chan struct{})
+	go func() { hub.Run(ctx); close(hubDone) }()
+	wr, err := writer.New(d, writer.Options{OnCommit: hub.Changed, Log: log})
+	if err != nil {
+		b.Fatal(err)
+	}
+	go wr.Run(ctx)
+	if err := wr.Do(ctx, commands.SyncCatalog{Catalog: cat, Datastar: static.Datastar()}); err != nil {
+		b.Fatal(err)
+	}
+	if err := wr.Do(ctx, commands.SeedBoard{}); err != nil {
+		b.Fatal(err)
+	}
+	ts := httptest.NewUnstartedServer(nil)
+	ts.Start()
+	cfg := config.Config{BaseURL: ts.URL, RepoURL: "https://example.com/repo"}
+	srv := web.New(ctx, web.Deps{Config: cfg, Log: log, Writer: wr, Hub: hub, Queries: queries.New(d),
+		Catalog: cat, StaticFS: static.FS, Content: content.FS, Checker: tscheck.New(b.TempDir())})
+	ts.Config.Handler = srv.Handler()
+	client := &http.Client{Transport: &http.Transport{DisableCompression: true, MaxIdleConnsPerHost: 2 * streams}}
+	if res, err := client.Get(ts.URL + "/showcase"); err != nil {
+		b.Fatal(err)
+	} else {
+		io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+	}
+	return &benchApp{ctx: ctx, url: ts.URL, hub: hub, catalog: cat, client: client, stop: func(streams *sync.WaitGroup) {
+		cancel()
+		ts.CloseClientConnections()
+		streams.Wait()
+		ts.Close()
+		<-hubDone
+		wr.Close()
+		d.Close()
+	}}
+}
+
 // BenchmarkShowcaseJoins opens 100 render streams on /showcase one after
 // another, each once its page has arrived, and reports the renders and read
 // transactions that took until they settled. Then it opens 100 more as
@@ -166,65 +232,28 @@ func settle(n func() int64) {
 func BenchmarkShowcaseJoins(b *testing.B) {
 	const streams = 100
 	for range b.N {
-		ctx, cancel := context.WithCancel(context.Background())
-		log := slog.New(slog.NewTextHandler(io.Discard, nil))
-		path := filepath.Join(b.TempDir(), "bench.db")
-		d, err := db.Open(ctx, path)
-		if err != nil {
-			b.Fatal(err)
-		}
-		cat, err := catalog.Load(components.FS)
-		if err != nil {
-			b.Fatal(err)
-		}
-		hub := live.New(app.HubOptions(d.R, log))
-		hubDone := make(chan struct{})
-		go func() { hub.Run(ctx); close(hubDone) }()
-		wr, err := writer.New(d, writer.Options{OnCommit: hub.Changed, Log: log})
-		if err != nil {
-			b.Fatal(err)
-		}
-		go wr.Run(ctx)
-		if err := wr.Do(ctx, commands.SyncCatalog{Catalog: cat, Datastar: static.Datastar()}); err != nil {
-			b.Fatal(err)
-		}
-		if err := wr.Do(ctx, commands.SeedBoard{}); err != nil {
-			b.Fatal(err)
-		}
-		ts := httptest.NewUnstartedServer(nil)
-		ts.Start()
-		cfg := config.Config{BaseURL: ts.URL, RepoURL: "https://example.com/repo"}
-		srv := web.New(ctx, web.Deps{Config: cfg, Log: log, Writer: wr, Hub: hub, Queries: queries.New(d),
-			Catalog: cat, StaticFS: static.FS, Content: content.FS, Checker: tscheck.New(b.TempDir())})
-		ts.Config.Handler = srv.Handler()
-		client := &http.Client{Transport: &http.Transport{DisableCompression: true, MaxIdleConnsPerHost: 2 * streams}}
-		if res, err := client.Get(ts.URL + "/showcase"); err != nil {
-			b.Fatal(err)
-		} else {
-			io.Copy(io.Discard, res.Body)
-			res.Body.Close()
-		}
-		renders := func() int64 { return hub.Stats().Renders }
+		a := startBench(b, streams)
+		renders := func() int64 { return a.hub.Stats().Renders }
 
 		b.ResetTimer()
-		r0, tx0 := renders(), hub.Stats().ReadTxs
-		joins, stop := context.WithCancel(ctx)
+		r0, tx0 := renders(), a.hub.Stats().ReadTxs
+		joins, stop := context.WithCancel(a.ctx)
 		var wg sync.WaitGroup
 		for i := range streams {
-			join(b, joins, client, ts.URL, fmt.Sprintf("join%05d", i), "identity", &wg)
+			join(b, joins, a.client, a.url, "/showcase", fmt.Sprintf("join%05d", i), "identity", &wg)
 		}
 		settle(renders)
 		b.ReportMetric(float64(renders()-r0), "renders")
-		b.ReportMetric(float64(hub.Stats().ReadTxs-tx0), "readtx")
+		b.ReportMetric(float64(a.hub.Stats().ReadTxs-tx0), "readtx")
 		stop()
 		wg.Wait()
-		settle(func() int64 { return int64(hub.Stats().Streams) })
+		settle(func() int64 { return int64(a.hub.Stats().Streams) })
 
 		runtime.GC()
 		var m0, m1 runtime.MemStats
 		runtime.ReadMemStats(&m0)
 		for i := range streams {
-			join(b, ctx, client, ts.URL, fmt.Sprintf("heap%05d", i), "gzip, deflate, br, zstd", &wg)
+			join(b, a.ctx, a.client, a.url, "/showcase", fmt.Sprintf("heap%05d", i), "gzip, deflate, br, zstd", &wg)
 		}
 		settle(renders)
 		b.StopTimer()
@@ -232,12 +261,101 @@ func BenchmarkShowcaseJoins(b *testing.B) {
 		runtime.ReadMemStats(&m1)
 		b.ReportMetric(float64(int64(m1.HeapAlloc)-int64(m0.HeapAlloc))/streams/(1<<20), "MiB/stream")
 
-		cancel()
-		ts.CloseClientConnections()
-		wg.Wait()
-		ts.Close()
-		<-hubDone
-		wr.Close()
-		d.Close()
+		a.stop(&wg)
+	}
+}
+
+// BenchmarkBoardPaint opens 150 render streams as browsers that accept
+// zstd, 20 on /showcase and the rest spread over the other pages, and has
+// one person paint the board for 10 s at the paint limit: a pixel every
+// 50 ms. It reports the renders per tick, the renders by view (the tabs on
+// /showcase, the tabs elsewhere, and the views the Showcase's viewers
+// share), and the cores the process kept busy while the board was painted.
+//
+//	go test ./internal/web -run '^$' -bench BoardPaint -benchtime 1x
+func BenchmarkBoardPaint(b *testing.B) {
+	const tabs, onShowcase = 150, 20
+	const paintFor, every = 10 * time.Second, 50 * time.Millisecond
+	for range b.N {
+		a := startBench(b, tabs)
+		pages := []string{"/", "/themes", "/about", "/contribute", "/playground"}
+		for _, c := range a.catalog.Components {
+			if !c.Unlisted {
+				pages = append(pages, "/components/"+c.Slug)
+			}
+		}
+		var wg sync.WaitGroup
+		for i := range tabs {
+			path, tab := pages[i%len(pages)], fmt.Sprintf("page%04d", i)
+			if i < onShowcase {
+				path, tab = "/showcase", fmt.Sprintf("show%04d", i)
+			}
+			join(b, a.ctx, a.client, a.url, path, tab, "gzip, deflate, br, zstd", &wg)
+		}
+		renders := func() int64 { return a.hub.Stats().Renders }
+		settle(renders)
+
+		jar, _ := cookiejar.New(nil)
+		painter := &http.Client{Jar: jar}
+		paint := func(i int) int {
+			body := fmt.Sprintf(`{"color":%d,"cells":[%d]}`, 1+i%15, i*7%(commands.BoardSize*commands.BoardSize))
+			req, _ := http.NewRequest(http.MethodPost, a.url+"/cmd/paint", strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Datastar-Request", "true")
+			req.Header.Set("Sec-Fetch-Site", "same-origin")
+			res, err := painter.Do(req)
+			if err != nil {
+				b.Fatal(err)
+			}
+			io.Copy(io.Discard, res.Body)
+			res.Body.Close()
+			return res.StatusCode
+		}
+
+		b.ResetTimer()
+		s0, cpu0, t0 := a.hub.Stats(), cpuTime(), time.Now()
+		tick := time.NewTicker(every)
+		painted, refused := 0, 0
+		for i := 0; time.Since(t0) < paintFor; i++ {
+			if paint(i) == http.StatusNoContent {
+				painted++
+			} else {
+				refused++
+			}
+			<-tick.C
+		}
+		tick.Stop()
+		cpu, wall := cpuTime()-cpu0, time.Since(t0)
+		settle(renders)
+		b.StopTimer()
+		s1 := a.hub.Stats()
+		if refused > 0 {
+			b.Errorf("%d of %d paints refused", refused, painted+refused)
+		}
+
+		groups := map[string]int64{}
+		views := map[string]int{}
+		for k, n := range s1.RendersByKey {
+			g := k
+			switch {
+			case strings.HasPrefix(k, "tab:show"):
+				g = "showcase-tab"
+			case strings.HasPrefix(k, "tab:page"):
+				g = "other-tab"
+			}
+			groups[g] += n - s0.RendersByKey[k]
+			views[g]++
+		}
+		ticks := s1.Ticks - s0.Ticks
+		b.ReportMetric(float64(s1.Renders-s0.Renders)/float64(max(1, ticks)), "renders/tick")
+		b.ReportMetric(float64(ticks), "ticks")
+		b.ReportMetric(float64(cpu)/float64(wall), "cores")
+		for _, g := range slices.Sorted(maps.Keys(groups)) {
+			b.ReportMetric(float64(groups[g]), g+"-renders")
+			b.Logf("%-18s %3d views, %6d renders", g, views[g], groups[g])
+		}
+		b.Logf("%d pixels painted in %v, %d frames sent", painted, wall.Round(time.Millisecond), s1.FramesSent-s0.FramesSent)
+
+		a.stop(&wg)
 	}
 }

@@ -76,8 +76,7 @@ func (e env) signIn(t *testing.T, sid, login string, ghID int64) *model.User {
 	if err := e.w.Do(ctx, commands.SignIn{SID: sid, User: model.User{GitHubID: ghID, Login: login}}); err != nil {
 		t.Fatal(err)
 	}
-	var u *model.User
-	e.q.View(ctx, func(r *queries.Reader) (err error) { u, err = r.SessionUser(ctx, sid); return })
+	u, _ := e.q.ViewValue(ctx, func(r *queries.Reader) (*model.User, error) { return r.SessionUser(ctx, sid) })
 	if u == nil || u.Login != login {
 		t.Fatalf("session user = %+v", u)
 	}
@@ -86,10 +85,8 @@ func (e env) signIn(t *testing.T, sid, login string, ghID int64) *model.User {
 
 func (e env) browse(t *testing.T, b model.Browse, uid int64) queries.BrowseResult {
 	t.Helper()
-	var res queries.BrowseResult
-	err := e.q.View(context.Background(), func(r *queries.Reader) (err error) {
-		res, err = r.Browse(context.Background(), b.Normalize(), uid)
-		return
+	res, err := e.q.ViewValue(context.Background(), func(r *queries.Reader) (queries.BrowseResult, error) {
+		return r.Browse(context.Background(), b.Normalize(), uid)
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -207,8 +204,8 @@ func TestSessionPrefs(t *testing.T) {
 			t.Fatalf("%T: %v", cmd, err)
 		}
 	}
-	prefs := func(sid string) (p model.SessionPrefs) {
-		e.q.View(ctx, func(r *queries.Reader) (err error) { p, err = r.Prefs(ctx, sid); return })
+	prefs := func(sid string) model.SessionPrefs {
+		p, _ := e.q.ViewValue(ctx, func(r *queries.Reader) (model.SessionPrefs, error) { return r.Prefs(ctx, sid) })
 		return p
 	}
 	want := model.SessionPrefs{InstallTab: "pinned", PreviewTheme: "nebula", PreviewSmooth: true, GallerySort: model.SortNewest}
@@ -352,8 +349,7 @@ func TestSnippetStoreCap(t *testing.T) {
 	if err := save("AAAAAAAA", 100); err != nil {
 		t.Fatal(err)
 	}
-	var n int64
-	e.q.View(ctx, func(r *queries.Reader) (err error) { n, err = r.SnippetBytes(ctx); return })
+	n, _ := e.q.ViewValue(ctx, func(r *queries.Reader) (int64, error) { return r.SnippetBytes(ctx) })
 	if n < 100 || n > 200 {
 		t.Fatalf("stored bytes = %d, want the JSON size of one ~100 byte snippet", n)
 	}
@@ -365,8 +361,7 @@ func TestSnippetStoreCap(t *testing.T) {
 	if err := save("CCCCCCCC", 100); !errors.Is(err, commands.ErrSnippetStoreFull) {
 		t.Fatalf("err = %v, want ErrSnippetStoreFull", err)
 	}
-	var sn *queries.Snippet
-	e.q.View(ctx, func(r *queries.Reader) (err error) { sn, err = r.Snippet(ctx, "CCCCCCCC"); return })
+	sn, _ := e.q.ViewValue(ctx, func(r *queries.Reader) (*queries.Snippet, error) { return r.Snippet(ctx, "CCCCCCCC") })
 	if sn != nil {
 		t.Fatal("the refused snippet must not be stored")
 	}

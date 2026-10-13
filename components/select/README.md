@@ -70,11 +70,10 @@ func (s *Server) demoSearch(w http.ResponseWriter, r *http.Request) {
 			kinds = append(kinds, k)
 		}
 	}
-	var bodies []queries.DemoBody
-	if err := s.q.View(r.Context(), func(rd *queries.Reader) (err error) {
-		bodies, err = rd.DemoSearch(r.Context(), q.Get("q"), kinds, limit)
-		return
-	}); err != nil {
+	bodies, err := s.q.ViewValue(r.Context(), func(rd *queries.Reader) ([]queries.DemoBody, error) {
+		return rd.DemoSearch(r.Context(), q.Get("q"), kinds, limit)
+	})
+	if err != nil {
 		s.fail(w, r, err)
 		return
 	}

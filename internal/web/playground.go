@@ -443,10 +443,8 @@ func (s *Server) cmdSnippet(w http.ResponseWriter, r *http.Request) {
 // submission bot to import playground links).
 func (s *Server) snippetJSON(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	var sn *queries.Snippet
-	err := s.q.View(r.Context(), func(rd *queries.Reader) (err error) {
-		sn, err = rd.Snippet(r.Context(), id)
-		return
+	sn, err := s.q.ViewValue(r.Context(), func(rd *queries.Reader) (*queries.Snippet, error) {
+		return rd.Snippet(r.Context(), id)
 	})
 	if err != nil {
 		s.fail(w, r, err)
@@ -471,10 +469,8 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 	form := strings.TrimSuffix(s.cfg.RepoURL, "/") + "/issues/new"
 	q := url.Values{"template": {"new-component.yml"}}
 	if id := r.URL.Query().Get("s"); commands.SnippetIDRe.MatchString(id) {
-		var sn *queries.Snippet
-		s.q.View(r.Context(), func(rd *queries.Reader) (err error) {
-			sn, err = rd.Snippet(r.Context(), id)
-			return
+		sn, _ := s.q.ViewValue(r.Context(), func(rd *queries.Reader) (*queries.Snippet, error) {
+			return rd.Snippet(r.Context(), id)
 		})
 		if sn != nil {
 			q.Set("source", strings.TrimSuffix(s.cfg.BaseURL, "/")+"/playground?s="+id)

@@ -29,6 +29,12 @@ func (q *Queries) View(ctx context.Context, fn func(*Reader) error) error {
 	return q.db.View(ctx, func(tx *sql.Tx) error { return fn(Read(tx)) })
 }
 
+// ViewValue runs fn like View and returns what it returned, or the zero
+// value and the error.
+func (q *Queries) ViewValue[T any](ctx context.Context, fn func(*Reader) (T, error)) (T, error) {
+	return q.db.ViewValue(ctx, func(tx *sql.Tx) (T, error) { return fn(Read(tx)) })
+}
+
 // Read runs queries in a read transaction that is already open: a render
 // worker's, which every view it renders in a tick shares.
 func Read(tx *sql.Tx) *Reader { return &Reader{tx: tx} }

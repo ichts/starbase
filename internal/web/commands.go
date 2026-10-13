@@ -64,11 +64,8 @@ func (s *Server) cmdSort(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) cmdStar(star bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var user *model.User
-		err := s.q.View(r.Context(), func(rd *queries.Reader) error {
-			var err error
-			user, err = rd.SessionUser(r.Context(), edge.SessionID(r.Context()))
-			return err
+		user, err := s.q.ViewValue(r.Context(), func(rd *queries.Reader) (*model.User, error) {
+			return rd.SessionUser(r.Context(), edge.SessionID(r.Context()))
 		})
 		if err != nil {
 			s.fail(w, r, err)

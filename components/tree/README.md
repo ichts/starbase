@@ -47,11 +47,10 @@ The handler behind this demo is Go with the [Datastar SDK](https://data-star.dev
 // demoChildren answers with the children of ?parent= (the top level without one).
 func (s *Server) demoChildren(w http.ResponseWriter, r *http.Request) {
 	parent := r.URL.Query().Get("parent")
-	var bodies []queries.DemoBody
-	if err := s.q.View(r.Context(), func(rd *queries.Reader) (err error) {
-		bodies, err = rd.DemoChildren(r.Context(), parent)
-		return
-	}); err != nil {
+	bodies, err := s.q.ViewValue(r.Context(), func(rd *queries.Reader) ([]queries.DemoBody, error) {
+		return rd.DemoChildren(r.Context(), parent)
+	})
+	if err != nil {
 		s.fail(w, r, err)
 		return
 	}

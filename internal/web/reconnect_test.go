@@ -110,3 +110,41 @@ func TestTelemetryOpensFromItsElement(t *testing.T) {
 		}
 	}
 }
+
+// TestStreamRefusalsAre204: the server answers a stream request it refuses
+// for good with 204, which retry 'error' does not repeat: a malformed one, a
+// cross-site one, and one for a page that does not exist. Commands keep their
+// 4xx.
+func TestStreamRefusalsAre204(t *testing.T) {
+	ts, c := newServer(t)
+	get(t, c, ts.URL+"/") // a session
+	for _, tc := range []struct {
+		path, body, site string
+		stream           bool
+		want             int
+	}{
+		{"/", `{"tabid":"x"}`, "same-origin", true, http.StatusNoContent},
+		{"/", `not json`, "same-origin", true, http.StatusNoContent},
+		{"/", `{"tabid":"tab12345"}`, "cross-site", true, http.StatusNoContent},
+		{"/", `{"tabid":"tab12345"}`, "cross-site", false, http.StatusForbidden},
+		{"/no-such-page", `{"tabid":"tab12345"}`, "same-origin", true, http.StatusNoContent},
+		{"/no-such-page", `{"tabid":"tab12345"}`, "same-origin", false, http.StatusNotFound},
+	} {
+		req, _ := http.NewRequest(http.MethodPost, ts.URL+tc.path, strings.NewReader(tc.body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Datastar-Request", "true")
+		req.Header.Set("Sec-Fetch-Site", tc.site)
+		req.Header.Set("Accept", "text/event-stream, text/html, application/json") // Datastar's
+		if tc.stream {
+			req.Header.Set("Accept", "text/event-stream") // streamInit's
+		}
+		res, err := c.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		if res.StatusCode != tc.want {
+			t.Errorf("POST %s %s (stream %v) = %d, want %d", tc.path, tc.body, tc.stream, res.StatusCode, tc.want)
+		}
+	}
+}

@@ -172,8 +172,15 @@ func TestDocumentHasNonceAndStream(t *testing.T) {
 	if i := strings.Index(body, "<body"); i < 0 || strings.Contains(body[i:i+strings.Index(body[i:], ">")], "data-init") {
 		t.Error("the body opens the render stream: a reconnect would copy the whole page")
 	}
-	if !strings.Contains(html.UnescapeString(body), `<div id="stream" hidden data-init="@post(location.pathname + location.search, {retry: 'error', retryMaxCount: Infinity,`) {
-		t.Error("page does not open its render stream from #stream with retry 'error'")
+	open := regexp.MustCompile(`<div id="stream" hidden data-init="(@post\(location\.pathname \+ location\.search, [^"]*)"></div>`).FindStringSubmatch(html.UnescapeString(body))
+	if open == nil {
+		t.Fatal("page does not open its render stream from #stream")
+	}
+	// The Accept header marks the request, for a 204 when it is refused for good.
+	for _, want := range []string{"retry: 'error'", "retryMaxCount: Infinity", "headers: {Accept: 'text/event-stream'}"} {
+		if !strings.Contains(open[1], want) {
+			t.Errorf("the render stream opens without %s: %s", want, open[1])
+		}
 	}
 	if strings.Contains(body, "/dev/reload") {
 		t.Error("dev reload leaked into a non-dev build")

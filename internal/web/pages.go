@@ -206,7 +206,7 @@ func (s *Server) stream(fn pageFunc, regions []*region) http.HandlerFunc {
 			Boot  string `json:"boot"` // dev builds only
 		}
 		if err := datastar.ReadSignals(r, &sig); err != nil || !tabIDRe.MatchString(sig.TabID) {
-			http.Error(w, "bad stream request", http.StatusBadRequest)
+			refuseStream(w)
 			return
 		}
 		// Dev live reload rides on the render stream (one connection per tab):
@@ -245,6 +245,18 @@ func (s *Server) stream(fn pageFunc, regions []*region) http.HandlerFunc {
 	}
 }
 
+// streamRequest reports whether r opens a page's render stream: streamInit
+// accepts nothing but an event stream, where commands take Datastar's list.
+func streamRequest(r *http.Request) bool {
+	return r.Method == http.MethodPost && r.Header.Get("Accept") == "text/event-stream"
+}
+
+// refuseStream refuses a stream for good. retry 'error' repeats every 4xx
+// and 5xx forever, and stops at a 204.
+func refuseStream(w http.ResponseWriter) {
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // frame renders a tab's #app as a patch. A page that is gone (a component
 // a deploy removed) renders the not-found page, as its document would.
 func (s *Server) frame(ctx context.Context, rd *queries.Reader, req *http.Request, tabID string, fn pageFunc) ([]byte, error) {
@@ -269,6 +281,10 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error) {
 }
 
 func (s *Server) notFound(w http.ResponseWriter, r *http.Request) {
+	if streamRequest(r) { // a 404 page's stream, or a route a deploy removed
+		refuseStream(w)
+		return
+	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.NotFound(w, r)
 		return

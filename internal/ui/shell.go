@@ -90,8 +90,10 @@ const StreamID = "stream"
 // streamInit opens this tab's render stream: a long-lived POST to the page's
 // own URL. retry 'error' keeps asking through a restart's 502s and 503s, and
 // a stream the server ends stays closed; hidden tabs release the connection
-// and re-open (with a fresh render) when visible again.
-const streamInit = `@post(location.pathname + location.search, {retry: 'error', retryMaxCount: Infinity, retryInterval: 400, retryMaxWait: 4000, openWhenHidden: false})`
+// and re-open (with a fresh render) when visible again. Accepting only an
+// event stream marks the request, so a refusal for good can answer it with
+// 204, which 'error' does not repeat (it repeats every 4xx).
+const streamInit = `@post(location.pathname + location.search, {retry: 'error', retryMaxCount: Infinity, retryInterval: 400, retryMaxWait: 4000, openWhenHidden: false, headers: {Accept: 'text/event-stream'}})`
 
 // TelemetryID is the element that opens /demo/telemetry: the stream names it
 // in its last event when the server stops, like StreamID.

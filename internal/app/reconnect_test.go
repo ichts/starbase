@@ -7,6 +7,8 @@ import (
 	"maps"
 	"net"
 	"net/http"
+	"net/http/httptest"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -161,3 +163,43 @@ func (d *deploy) bothRefused() bool {
 	defer d.mu.Unlock()
 	return d.refused["POST /showcase"] > 0 && d.refused["GET /demo/telemetry"] > 0
 }
+
+// TestRefusedStreamStaysClosed: a 404 page's stream asks once. The server
+// refuses it for good with 204, and retry 'error', which repeats every 4xx,
+// stops there.
+func TestRefusedStreamStaysClosed(t *testing.T) {
+	chrome := findChrome(t)
+	a, base, ln := startApp(t, "")
+	var mu sync.Mutex
+	var codes []int // the answers to the page's stream
+	count := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			a.Handler.ServeHTTP(w, r)
+			return
+		}
+		rec := httptest.NewRecorder()
+		a.Handler.ServeHTTP(rec, r)
+		mu.Lock()
+		codes = append(codes, rec.Code)
+		mu.Unlock()
+		maps.Copy(w.Header(), rec.Header())
+		w.WriteHeader(rec.Code)
+		w.Write(rec.Body.Bytes())
+	})
+	results := serveProbe(t, ln, "/no-such-page", refusedJS, count, nil)
+	got := string(runChrome(t, chrome, base+"/no-such-page", results))
+	mu.Lock()
+	defer mu.Unlock()
+	if got != "1" || !slices.Equal(codes, []int{http.StatusNoContent}) {
+		t.Fatalf("the page asked %s times, the server answered %v; want once, 204", got, codes)
+	}
+}
+
+// refusedJS waits for the stream's first answer, then for as long as retry
+// 'error' would take to ask three more times (after 400, 800 and 1600 ms).
+const refusedJS = `
+const asked = () => performance.getEntriesByType('resource').filter((e) => e.initiatorType === 'fetch' && new URL(e.name).pathname === location.pathname).length
+for (const end = Date.now() + 15000; Date.now() < end && asked() === 0; ) await new Promise((r) => setTimeout(r, 50))
+await new Promise((r) => setTimeout(r, 3000))
+await fetch('/__probe/result', { method: 'POST', body: String(asked()) })
+`

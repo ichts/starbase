@@ -42,14 +42,21 @@ const maxStreams = 150
 // 449 to 494 MiB while the board was painted, 247 to 263 MiB with it.
 const MemoryLimit = 256 << 20
 
+// streamBudget is the heap the render streams' encoders may hold together.
+// lith's default, half of MemoryLimit, held about 48 brotli streams (2.2 to
+// 2.7 MiB each) and sent the rest uncompressed, 130 to 220 KB a frame; 150
+// streams peaked at 217 MB RSS, so there is room for more.
+const streamBudget = 200 << 20
+
 // HubOptions configure the render loop. Brotli's window is 2^19, not
 // lith's 2^18: a gallery frame's delta took 174 B instead of 522 B, for
 // 0.5 MiB more per brotli stream. Every heartbeat patches $_ping, which the
-// page's watchdog (ui.Watchdog) waits for.
+// page's watchdog (ui.Watchdog) waits for. Each call has a budget of its own.
 func HubOptions(read *sql.DB, log *slog.Logger, heartbeat time.Duration) live.Options {
 	return live.Options{Read: read, Log: log, MaxStreams: maxStreams, Heartbeat: heartbeat, HeartbeatSignal: ui.PingSignal, SSE: sse.Options{
 		ZstdLevel: zstd.SpeedFastest, ZstdWindow: 19, ZstdLowMemory: true,
 		BrotliWindow: 19,
+		Budget:       sse.NewBudget(sse.BudgetOptions{Limit: streamBudget}),
 	}}
 }
 

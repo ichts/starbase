@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/zweiundeins/lith/live"
 	"github.com/zweiundeins/lith/sse"
 	"github.com/zweiundeins/lith/writer"
@@ -40,9 +41,14 @@ const maxStreams = 150
 // 449 to 494 MiB while the board was painted, 247 to 263 MiB with it.
 const MemoryLimit = 256 << 20
 
-// HubOptions configure the render loop.
+// HubOptions configure the render loop. Brotli's window is 2^19, not
+// lith's 2^18: a gallery frame's delta took 174 B instead of 522 B, for
+// 0.5 MiB more per brotli stream.
 func HubOptions(read *sql.DB, log *slog.Logger) live.Options {
-	return live.Options{Read: read, Log: log, MaxStreams: maxStreams, SSE: sse.Options{ZstdLowMemory: true}}
+	return live.Options{Read: read, Log: log, MaxStreams: maxStreams, SSE: sse.Options{
+		ZstdLevel: zstd.SpeedFastest, ZstdWindow: 19, ZstdLowMemory: true,
+		BrotliWindow: 19,
+	}}
 }
 
 type App struct {

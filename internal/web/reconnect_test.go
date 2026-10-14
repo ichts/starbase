@@ -218,4 +218,7 @@ func TestRenderStreamInBrotliWithoutZstd(t *testing.T) {
 	if err != nil || !strings.HasPrefix(line, "event: ") {
 		t.Errorf("first line %q, %v", line, err)
 	}
+	if got := s.hub.Budget().Stats().Streams; got["br q4 2^19"] != 1 {
+		t.Errorf("streams by tier %v, want one br q4 2^19 (app.HubOptions' BrotliWindow)", got)
+	}
 }

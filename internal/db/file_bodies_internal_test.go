@@ -29,11 +29,11 @@ type storedFile struct {
 func TestFileBodiesMigration(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "s.db")
-	old, err := sqlite.Open(ctx, path, sqlite.Options{Migrate: func(ctx context.Context, w *sql.DB) error { return migrateTo(ctx, w, 9) }})
+	pre, err := sqlite.Open(ctx, path, sqlite.Options{Migrate: func(ctx context.Context, w *sql.DB) error { return migrateTo(ctx, w, 9) }})
 	if err != nil {
 		t.Fatal(err)
 	}
-	w := old.W
+	w := pre.W
 	lib := bytes.Repeat([]byte("export const lib = 1;\n"), 50_000) // a vendored library, 1.1 MB, in both versions
 	datastar := []byte("// Datastar\n")
 	files := []storedFile{
@@ -53,7 +53,7 @@ func TestFileBodiesMigration(t *testing.T) {
 		INSERT INTO catalog_snapshot_components (snapshot, slug, hash) VALUES ('cccccccccccc', 'gone', 'aaaaaaaaaaaa')`); err != nil {
 		t.Fatal(err)
 	}
-	old.Close()
+	pre.Close()
 
 	d, err := Open(ctx, path)
 	if err != nil {
@@ -77,7 +77,7 @@ func TestFileBodiesMigration(t *testing.T) {
 	if n := count(`PRAGMA freelist_count`); n != 0 {
 		t.Errorf("%d free pages: the migration should vacuum", n)
 	}
-	q := queries.New(d.R)
+	q := queries.New(d)
 	check := func(step string, want []storedFile) {
 		t.Helper()
 		err := q.View(ctx, func(r *queries.Reader) error {

@@ -142,15 +142,17 @@ func residentSet() uint64 {
 
 // TestStreamBudgetCapsTabs: memory caps the render streams, not a count.
 // Under production's hub options and memory limit, tabs open one by one,
-// each retrying a 503 as the page does, until the budget of 150 MiB turns
-// one away for good. Every stream it lets in compresses (none goes out
-// uncompressed or in raw blocks). On the data table's page, the largest,
-// that is about 168 tabs with zstd and 114 with brotli only (a tab's own
-// view keeps no frame once its stream has it); once three close, the tab
-// turned away gets in. On a page with small frames more than 150 get in. The heartbeat is
-// 200 ms instead of 5 s: zstd streams move down to the window their frames
-// need at their next write after a stream found no room, and the ping is
-// what they write while the page is still.
+// each retrying a 503 as the page does, until the budget of 120 MiB turns
+// one away for good. Every stream it lets in compresses with a window that
+// holds its first frame (none goes out uncompressed, in raw blocks or
+// below 2^18 for the data table's 230 KB). On the data table's page, the
+// largest, that is about 134 tabs with zstd, 91 with brotli only and 109
+// when half are each (a tab's own view keeps no frame once its stream has
+// it); once three close, the tab turned away gets in. On a page with small
+// frames more than 150 get in. The heartbeat is 200 ms instead of 5 s:
+// zstd streams move down to the window their frames need at their next
+// write after a stream found no room, and the ping is what they write
+// while the page is still.
 func TestStreamBudgetCapsTabs(t *testing.T) {
 	if testing.Short() {
 		t.Skip("opens hundreds of streams")
@@ -158,12 +160,15 @@ func TestStreamBudgetCapsTabs(t *testing.T) {
 	defer debug.SetMemoryLimit(debug.SetMemoryLimit(app.MemoryLimit))
 	const zstdOrBr, brOnly = "gzip, deflate, br, zstd", "gzip, deflate, br"
 	for _, c := range []struct {
-		name, path, ae string
-		least, most    int // tabs in when full
+		name, path  string
+		ae          []string // in turn
+		least, most int      // tabs in when full
+		window      int      // the least window a stream holds
 	}{
-		{"data table, zstd", "/components/data-table", zstdOrBr, 150, 185},
-		{"data table, brotli", "/components/data-table", brOnly, 105, 125},
-		{"small frames, zstd", "/about", zstdOrBr, 151, 400},
+		{"data table, zstd", "/components/data-table", []string{zstdOrBr}, 125, 140, 18},
+		{"data table, brotli", "/components/data-table", []string{brOnly}, 85, 97, 18},
+		{"data table, half each", "/components/data-table", []string{zstdOrBr, brOnly}, 100, 118, 18},
+		{"small frames, zstd", "/about", []string{zstdOrBr}, 151, 400, 0},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s := startServerWith(t, config.Config{Heartbeat: 200 * time.Millisecond})
@@ -172,7 +177,7 @@ func TestStreamBudgetCapsTabs(t *testing.T) {
 			tr := &http.Transport{DisableCompression: true, MaxIdleConnsPerHost: -1}
 			defer tr.CloseIdleConnections()
 			cl := &http.Client{Transport: tr, Jar: s.c.Jar}
-			want := map[string]string{zstdOrBr: "zstd", brOnly: "br"}[c.ae]
+			coding := map[string]string{zstdOrBr: "zstd", brOnly: "br"}
 			runtime.GC()
 			before := residentSet()
 			peak := peaks()
@@ -182,17 +187,17 @@ func TestStreamBudgetCapsTabs(t *testing.T) {
 					b.close()
 				}
 			}()
-			last, refused := "", 0
+			last, lastAE, refused := "", "", 0
 			for i := 0; ; i++ {
-				id := fmt.Sprintf("budgettab%04d", i)
-				b, n := retryTab(t, url, cl, id, c.ae, i, 3*time.Second)
+				id, ae := fmt.Sprintf("budgettab%04d", i), c.ae[i%len(c.ae)]
+				b, n := retryTab(t, url, cl, id, ae, i, 3*time.Second)
 				refused += n
 				if b == nil {
-					last = id
+					last, lastAE = id, ae
 					break
 				}
-				if got := b.res.Header.Get("Content-Encoding"); got != want {
-					t.Fatalf("tab %d in %q, want %s", i, got, want)
+				if got := b.res.Header.Get("Content-Encoding"); got != coding[ae] {
+					t.Fatalf("tab %d in %q, want %s", i, got, coding[ae])
 				}
 				open = append(open, b)
 				for end := time.Now().Add(10 * time.Second); b.read.Load() == 0; time.Sleep(time.Millisecond) {
@@ -200,8 +205,8 @@ func TestStreamBudgetCapsTabs(t *testing.T) {
 						t.Fatalf("tab %d: no first frame", i)
 					}
 				}
-				if st := s.hub.Budget().Stats(); st.Streams["identity"] > 0 || st.Streams["zstd asleep"] > 0 {
-					t.Fatalf("tab %d: a stream without an encoder after its first frame: %v", i, st.Streams)
+				if k := belowWindow(s.hub.Budget().Stats().Streams, c.window); k != "" {
+					t.Fatalf("tab %d: a stream at %s after its first frame, want a window of 2^%d at least", i, k, c.window)
 				}
 				if len(open) > c.most {
 					break
@@ -227,19 +232,39 @@ func TestStreamBudgetCapsTabs(t *testing.T) {
 			}
 			heap, gomem, rss = peak()
 			t.Logf("every tab rendered three times: peaks: heap %.0f MiB, Go %.0f MiB, resident %.0f MiB", heap, gomem, rss)
+			if k := belowWindow(s.hub.Budget().Stats().Streams, c.window); k != "" {
+				t.Fatalf("after three renders, a stream at %s", k)
+			}
 
 			for _, b := range open[:3] {
 				b.close()
 			}
 			open = open[3:]
-			b, _ := retryTab(t, url, cl, last, c.ae, len(open)+3, 20*time.Second)
+			b, _ := retryTab(t, url, cl, last, lastAE, len(open)+3, 20*time.Second)
 			if b == nil {
 				t.Fatal("the tab turned away did not get in once three tabs closed")
 			}
 			open = append(open, b)
-			if got := b.res.Header.Get("Content-Encoding"); got != want {
-				t.Fatalf("the tab that got in at last: %q, want %s", got, want)
+			if got := b.res.Header.Get("Content-Encoding"); got != coding[lastAE] {
+				t.Fatalf("the tab that got in at last: %q, want %s", got, coding[lastAE])
 			}
 		})
 	}
+}
+
+// belowWindow returns the first of the budget's tiers, as its Stats name
+// them, that goes out uncompressed, has no encoder or holds a window
+// below 2^w, or "" for none.
+func belowWindow(tiers map[string]int, w int) string {
+	for k := range tiers {
+		_, after, ok := strings.Cut(k, " 2^")
+		if !ok {
+			return k // identity, zstd asleep
+		}
+		n, _, _ := strings.Cut(after, " ")
+		if bits, err := strconv.Atoi(n); err != nil || bits < w {
+			return k
+		}
+	}
+	return ""
 }

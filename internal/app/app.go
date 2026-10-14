@@ -36,18 +36,20 @@ const MemoryLimit = 256 << 20
 
 // streamBudget caps the render streams by memory, not by a count: what
 // they may hold together as lith's budget books it, each stream's encoder,
-// 32 KiB besides and every view's newest frame. A tab that cannot have the
-// smallest tier gets 503, and its page asks again (retry 'error'). The rest
-// of MemoryHigh is for the app, the garbage between collections and the
-// type check's compiler (up to 192 MB).
-const streamBudget = 150 << 20
+// 32 KiB besides and every view's newest frame. A tab without room for a
+// window that holds its first frame gets 503, and its page asks again
+// (retry 'error'). The rest of MemoryHigh is for the app, the garbage
+// between collections and a type check (about 65 MiB): with 150 MiB of
+// zstd streams the server alone reached 317 MiB resident, against
+// MemoryHigh's 320.
+const streamBudget = 120 << 20
 
 // HubOptions configure the render loop. The budget refuses the streams it
-// has no room for, so every stream it lets in compresses, and live's
-// MaxStreams (2000) is only a backstop. Each stream gets the smallest
-// window that holds its largest frame, up to 2^19. Every heartbeat patches
-// $_ping, which the page's watchdog (ui.Watchdog) waits for. Each call has
-// a budget of its own.
+// has no room for, so every stream it lets in compresses with a window
+// that holds its frame, and live's MaxStreams (2000) is only a backstop.
+// Each stream gets the smallest window that holds its largest frame, up to
+// 2^19. Every heartbeat patches $_ping, which the page's watchdog
+// (ui.Watchdog) waits for. Each call has a budget of its own.
 func HubOptions(read *sql.DB, log *slog.Logger, heartbeat time.Duration) live.Options {
 	return live.Options{Read: read, Log: log, Heartbeat: heartbeat, HeartbeatSignal: ui.PingSignal, SSE: sse.Options{
 		ZstdLevel: zstd.SpeedFastest, ZstdWindow: 19, ZstdLowMemory: true,

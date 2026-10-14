@@ -98,6 +98,10 @@ const StreamID = "stream"
 // 204, which 'error' does not repeat (it repeats every 4xx).
 const streamInit = `@post(location.pathname + location.search, {retry: 'error', retryMaxCount: Infinity, retryInterval: 400, retryMaxWait: 4000, openWhenHidden: false, headers: {Accept: 'text/event-stream'}})`
 
+// streamRetrying holds the watchdog off while Datastar retries the stream,
+// as it does for a tab the budget refuses: re-creating #stream would restart the backoff.
+const streamRetrying = `evt.detail.el === el && evt.detail.type === 'retrying' && ($_quiet = 0)`
+
 // PingSignal is the signal the render stream's heartbeat patches
 // (live.Options.HeartbeatSignal), with a number that grows.
 const PingSignal = "_ping"

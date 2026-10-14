@@ -179,9 +179,13 @@ func TestDocumentHasNonceAndStream(t *testing.T) {
 	if i := strings.Index(body, "<body"); i < 0 || strings.Contains(body[i:i+strings.Index(body[i:], ">")], "data-init") {
 		t.Error("the body opens the render stream: a reconnect would copy the whole page")
 	}
-	open := regexp.MustCompile(`<div id="stream" hidden data-init="(@post\(location\.pathname \+ location\.search, [^"]*)"></div>`).FindStringSubmatch(html.UnescapeString(body))
+	open := regexp.MustCompile(`<div id="stream" hidden data-init="(@post\(location\.pathname \+ location\.search, [^"]*)" data-on:datastar-fetch="([^"]*)"></div>`).FindStringSubmatch(html.UnescapeString(body))
 	if open == nil {
 		t.Fatal("page does not open its render stream from #stream")
+	}
+	// While Datastar retries the stream, the watchdog must not re-create it.
+	if !strings.Contains(open[2], "'retrying'") || !strings.Contains(open[2], "$_quiet = 0") {
+		t.Errorf("#stream does not hold the watchdog off while it retries: %q", open[2])
 	}
 	// The Accept header marks the request, for a 204 when it is refused for good.
 	for _, want := range []string{"retry: 'error'", "retryMaxCount: Infinity", "headers: {Accept: 'text/event-stream'}"} {

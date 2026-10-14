@@ -192,3 +192,30 @@ func TestStreamRefusalsAre204(t *testing.T) {
 		}
 	}
 }
+
+// TestRenderStreamInBrotliWithoutZstd: a browser that takes brotli but not
+// zstd (Safari) gets its render stream in brotli. With ZstdLowMemory, lith
+// v0.1.0's budget sent it uncompressed.
+func TestRenderStreamInBrotliWithoutZstd(t *testing.T) {
+	s := startServer(t)
+	get(t, s.c, s.ts.URL+"/")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, s.ts.URL+"/", strings.NewReader(`{"tabid":"abcdef1234"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("Accept-Encoding", "gzip, deflate, br")
+	res, err := s.c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if got := res.Header.Get("Content-Encoding"); got != "br" {
+		t.Fatalf("render stream for gzip, deflate, br in %q, want br", got)
+	}
+	line, err := bufio.NewReader(decoded(t, res)).ReadString('\n')
+	if err != nil || !strings.HasPrefix(line, "event: ") {
+		t.Errorf("first line %q, %v", line, err)
+	}
+}

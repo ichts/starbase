@@ -26,6 +26,7 @@ import (
 
 	"starbase/components"
 	"starbase/content"
+	"starbase/internal/app"
 	"starbase/internal/catalog"
 	"starbase/internal/commands"
 	"starbase/internal/config"
@@ -73,7 +74,7 @@ func startServer(t *testing.T) testServer {
 	if err != nil {
 		t.Fatal(err)
 	}
-	hub := live.New(live.Options{Read: d.R, Log: log})
+	hub := live.New(app.HubOptions(d.R, log)) // production's, streams' compression included
 	hubDone := make(chan struct{})
 	go func() { hub.Run(ctx); close(hubDone) }()
 	t.Cleanup(func() { cancel(); <-hubDone })

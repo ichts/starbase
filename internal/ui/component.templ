@@ -1,8 +1,10 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"starbase/internal/catalog"
 	"starbase/internal/queries"
@@ -11,10 +13,41 @@ import (
 type ComponentView struct {
 	Card      queries.Card
 	Component *catalog.Component
-	Playground *catalog.Playground
+	Parts     ComponentParts
 	Install   InstallView
 	ScriptURL string
 	EditURL   string
+}
+
+// ComponentParts are the sections of a component page that depend on the
+// catalog alone, as markup: web renders them once per component.
+type ComponentParts struct {
+	Playground string // the auto Playground, "" without a manifest
+	Size       string // SizeTable
+	API        string // APIReference
+}
+
+// RenderComponentParts renders c's ComponentParts.
+func RenderComponentParts(c *catalog.Component) (ComponentParts, error) {
+	var p ComponentParts
+	var b strings.Builder
+	if pg := c.Playground(); pg != nil {
+		if err := Playground(pg).Render(context.Background(), &b); err != nil {
+			return p, err
+		}
+		p.Playground = b.String()
+		b.Reset()
+	}
+	if err := SizeTable(c.Sizes).Render(context.Background(), &b); err != nil {
+		return p, err
+	}
+	p.Size = b.String()
+	b.Reset()
+	if err := APIReference(c).Render(context.Background(), &b); err != nil {
+		return p, err
+	}
+	p.API = b.String()
+	return p, nil
 }
 
 templ ComponentPage(s Shell, v ComponentView) {
@@ -60,19 +93,19 @@ templ ComponentPage(s Shell, v ComponentView) {
 		</header>
 		<div class="docs">
 			<article class="prose">
-				if v.Playground != nil {
+				if v.Parts.Playground != "" {
 					<h2 id="playground">Playground</h2>
-					@Playground(v.Playground)
+					@templ.Raw(v.Parts.Playground)
 				}
 				@templ.Raw(v.Component.DocHTML)
 				@Installation(v.Install)
-				@SizeTable(v.Component.Sizes)
-				@APIReference(v.Component)
+				@templ.Raw(v.Parts.Size)
+				@templ.Raw(v.Parts.API)
 			</article>
 			<aside>
 				<nav class="toc" aria-label="On this page">
 					<h2>On this page</h2>
-					if v.Playground != nil {
+					if v.Parts.Playground != "" {
 						<a href="#playground">Playground</a>
 					}
 					for _, h := range v.Component.Headings {

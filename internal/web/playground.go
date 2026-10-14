@@ -314,7 +314,7 @@ func (s *Server) componentDeps() string {
 
 func (s *Server) codePlaygroundPage(rc *renderCtx) (view, error) {
 	files := map[string]string{"component.js": starterJS, "index.html": starterHTML}
-	v := ui.CodePlaygroundView{Deps: s.componentDeps(), Share: rc.tab.PlaygroundShare}
+	v := ui.CodePlaygroundView{Deps: s.cache.deps(), Share: rc.tab.PlaygroundShare}
 	q := rc.req.URL.Query()
 	if id := q.Get("s"); id != "" {
 		sn, err := rc.r.Snippet(rc.ctx, id)

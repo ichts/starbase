@@ -145,6 +145,7 @@ func TestPreviewTypeScript(t *testing.T) {
 	}
 	srv := &Server{previews: c, catalog: &catalog.Catalog{}, sizes: map[[32]byte]map[string]any{},
 		checks: map[[32]byte][]tscheck.Diagnostic{}, log: slog.New(slog.DiscardHandler)}
+	srv.cache = newRenderCache(srv)
 	req := httptest.NewRequest("GET", "/", nil)
 	req.SetPathValue("commit", commit)
 	req.SetPathValue("slug", "comet")

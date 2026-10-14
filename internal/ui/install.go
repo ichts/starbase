@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"encoding/json"
 	"regexp"
 	"strconv"
@@ -11,9 +12,16 @@ import (
 )
 
 // Snippet is a copyable code block: Raw is what the copy button copies,
-// HTML its highlighted form.
+// Block the block's markup (the button, and Raw highlighted).
 type Snippet struct {
-	Raw, HTML string
+	Raw, Block string
+}
+
+// NewSnippet highlights raw (HTML) and renders its block.
+func NewSnippet(raw string) Snippet {
+	var b strings.Builder
+	_ = snippetBlock(raw, catalog.Highlight(raw, "html")).Render(context.Background(), &b) // a strings.Builder doesn't fail
+	return Snippet{Raw: raw, Block: b.String()}
 }
 
 // InstallView is a component page's Installation section: one sb-tabs

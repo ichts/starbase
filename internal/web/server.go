@@ -33,6 +33,7 @@ type Server struct {
 	boot    string
 	secure  bool
 
+	cache        *renderCache // what pages render from the binary's content alone (rendercache.go)
 	previews     *previewCache
 	board        atomic.Pointer[boardCache]
 	paintLimit   *limiter // per session
@@ -105,6 +106,7 @@ func New(ctx context.Context, d Deps) *Server {
 		exports:       make(chan struct{}, 2), // the read pool has at least four
 	}
 	s.oauth = newOAuth(d.Config)
+	s.cache = newRenderCache(s)
 	return s
 }
 

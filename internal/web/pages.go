@@ -116,8 +116,16 @@ func (s *Server) shell(req *http.Request, user *model.User, v view) ui.Shell {
 }
 
 // jsonLD describes the site (with its search, for search engines) and
-// whatever the page adds (a component is SoftwareSourceCode).
+// whatever the page adds (a component is SoftwareSourceCode). Pages that
+// add nothing share one string (rendercache.go).
 func (s *Server) jsonLD(v view) string {
+	if len(v.Schema) == 0 {
+		return s.cache.siteLD()
+	}
+	return s.buildJSONLD(v.Schema)
+}
+
+func (s *Server) buildJSONLD(schema []any) string {
 	base := strings.TrimSuffix(s.cfg.BaseURL, "/")
 	graph := []any{map[string]any{
 		"@type":       "WebSite",
@@ -131,7 +139,7 @@ func (s *Server) jsonLD(v view) string {
 			"query-input": "required name=search_term_string",
 		},
 	}}
-	graph = append(graph, v.Schema...)
+	graph = append(graph, schema...)
 	b, _ := json.Marshal(map[string]any{"@context": "https://schema.org", "@graph": graph}) // escapes <, > and &
 	return string(b)
 }

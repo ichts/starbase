@@ -14,7 +14,7 @@ templ Installation(v InstallView) {
 	>
 		<div slot={ installSlot("autoloader") } class="install-panel">
 			<p>Add Datastar with Rocket and the Starbase autoloader once per page, then use the tag: the autoloader imports each component the first time its tag appears, including tags a Datastar morph adds later. The Datastar here is v1.0.4 with <a href={ safe(v.Patches) }>Starbase's fixes</a> until they are released; the components also run on the official release.</p>
-			@snippetBlock(v.Autoloader)
+			@templ.Raw(v.Autoloader.Block)
 			<p class="muted">No flash of undefined elements: put <code>class="sb-cloak"</code> on <code>{ "<html>" }</code> and add <code>{ ".sb-cloak :not(:defined) { visibility: hidden }" }</code> to your CSS. The autoloader removes the class once the page's components are defined.</p>
 		</div>
 		<div slot={ installSlot("component") } class="install-panel">
@@ -27,14 +27,14 @@ templ Installation(v InstallView) {
 					}
 				}
 			</p>
-			@snippetBlock(v.Component)
+			@templ.Raw(v.Component.Block)
 			<p>Or the minified module files ({ moduleFiles(v.ModuleFiles) }, which the browser requests as it finds their imports), each pinned in the import map:</p>
-			@snippetBlock(v.ComponentModules)
+			@templ.Raw(v.ComponentModules.Block)
 		</div>
 		<div slot={ installSlot("pinned") } class="install-panel">
 			if v.Pinned.Raw != "" {
 				<p>In production, pin today's whole catalog: its autoloader and an import map with integrity hashes, so the browser refuses any file that changed. This map covers Datastar and this component; <a href={ safe(v.ImportMap) }>importmap.json</a> has the hashes of every component, to merge into yours.</p>
-				@snippetBlock(v.Pinned)
+				@templ.Raw(v.Pinned.Block)
 			} else {
 				<p>Pinned URLs appear once this catalog version is published.</p>
 			}
@@ -56,7 +56,7 @@ templ Installation(v InstallView) {
 					</li>
 				}
 			</ul>
-			@snippetBlock(v.SelfHost)
+			@templ.Raw(v.SelfHost.Block)
 			<p>Or copy the module files, keeping each component's folder, and load each component's module:</p>
 			<ul class="install-files">
 				for _, g := range v.Files {
@@ -75,14 +75,14 @@ templ Installation(v InstallView) {
 					</li>
 				}
 			</ul>
-			@snippetBlock(v.SelfHostModules)
+			@templ.Raw(v.SelfHostModules.Block)
 		</div>
 	</sb-tabs>
 }
 
-templ snippetBlock(sn Snippet) {
+templ snippetBlock(raw, html string) {
 	<div class="code-block">
-		<sb-copy-button class="code-copy" value={ sn.Raw }></sb-copy-button>
-		@templ.Raw(sn.HTML)
+		<sb-copy-button class="code-copy" value={ raw }></sb-copy-button>
+		@templ.Raw(html)
 	</div>
 }

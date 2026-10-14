@@ -19,6 +19,7 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- Pages render the parts that depend only on the catalog and the embedded files once, not on every frame of their render stream: the install snippets' highlighting, the Playground and API sections, the Themes page's CSS and the content pages' Markdown. A frame of a component page allocates about 22 kB instead of 1.4 MB and takes a tenth of the CPU; the Themes page about 15 kB instead of 2.2 MB. The pages are byte for byte the same.
 - The autoloader loads each component as its one-file bundle, one request where it made one per module file (`sb-kanban-board`: 1 instead of 13); snapshots pinned before keep loading what they did. A component's size is its bundle and those of the components it renders, on the gallery cards, its page and the playground's size line (`sb-kanban-board`: 8.8 kB instead of 14.4 kB), with the module files under "As module files"; a library it loads on first use counts, and is marked as such (ECharts' 298.8 kB).
 - The database keeps each distinct body of the published component files once (migration 010, which then vacuums the file), shared by every version that has the same bytes: on the production site 4.9 MB instead of 16.6 MB. Every pinned URL serves the same bytes with the same integrity.
 

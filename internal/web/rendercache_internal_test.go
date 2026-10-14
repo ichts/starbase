@@ -105,7 +105,7 @@ func TestInstallCacheWaitsForIntegrities(t *testing.T) {
 	if _, ok := s.cache.install("kanban-board"); ok {
 		t.Error("an install view with missing integrities must not be kept")
 	}
-	if err := empty.bus.Exec(context.Background(), commands.SyncCatalog{Catalog: s.catalog, Datastar: static.Datastar()}); err != nil {
+	if err := empty.writer.Do(context.Background(), commands.SyncCatalog{Catalog: s.catalog, Datastar: static.Datastar()}); err != nil {
 		t.Fatal(err)
 	}
 	if v, complete := install(); !complete || v.Pinned.Raw == "" {

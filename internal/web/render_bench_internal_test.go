@@ -16,11 +16,13 @@ import (
 	"starbase/internal/catalog"
 	"starbase/internal/commands"
 	"starbase/internal/config"
-	"starbase/internal/cqrs"
 	"starbase/internal/db"
 	"starbase/internal/queries"
 	"starbase/internal/ui"
 	"starbase/static"
+
+	"github.com/zweiundeins/lith/live"
+	"github.com/zweiundeins/lith/writer"
 )
 
 // renderPages are the pages the render benchmarks cover: a pattern's
@@ -64,43 +66,51 @@ func newBenchServerWith(tb testing.TB, synced bool) *Server {
 	if err != nil {
 		tb.Fatal(err)
 	}
-	hub := cqrs.NewHub()
-	bus := cqrs.NewBus(d.W, hub, log)
-	go bus.Run(ctx)
+	cfg := config.Config{BaseURL: "https://starbase.example", RepoURL: "https://example.com/repo"}
+	hub := live.New(live.Options{Read: d.R, Log: log}) // a frame renders the same on any hub
+	hubDone := make(chan struct{})
+	go func() { hub.Run(ctx); close(hubDone) }()
+	tb.Cleanup(func() { cancel(); <-hubDone })
+	wr, err := writer.New(d, writer.Options{OnCommit: hub.Changed, Log: log})
+	if err != nil {
+		tb.Fatal(err)
+	}
+	go wr.Run(ctx)
+	tb.Cleanup(func() { wr.Close() })
 	if synced {
-		if err := bus.Exec(ctx, commands.SyncCatalog{Catalog: cat, Datastar: static.Datastar()}); err != nil {
+		if err := wr.Do(ctx, commands.SyncCatalog{Catalog: cat, Datastar: static.Datastar()}); err != nil {
 			tb.Fatal(err)
 		}
-		if err := bus.Exec(ctx, commands.SeedDemo{}); err != nil {
+		if err := wr.Do(ctx, commands.SeedDemo{}); err != nil {
 			tb.Fatal(err)
 		}
 	}
-	cfg := config.Config{BaseURL: "https://starbase.example", RepoURL: "https://example.com/repo"}
-	return New(ctx, Deps{Config: cfg, Log: log, Bus: bus, Hub: hub, Queries: queries.New(d.R),
+	return New(ctx, Deps{Config: cfg, Log: log, Writer: wr, Hub: hub, Queries: queries.New(d),
 		Catalog: cat, StaticFS: static.FS, Content: content.FS})
 }
 
-// frameRequest is a render stream's request, as the middleware leaves it.
+// frameRequest is a render stream's request, without the session and the
+// nonce the middleware would add (lith/edge keeps their context keys).
 func frameRequest(path string) *http.Request {
 	r := httptest.NewRequest("POST", path, nil)
 	if slug, ok := strings.CutPrefix(path, "/components/"); ok {
 		r.SetPathValue("slug", slug)
 	}
-	ctx := context.WithValue(r.Context(), sidKey, "benchsession0000")
-	ctx = context.WithValue(ctx, nonceKey, "benchnonce")
-	return r.WithContext(ctx)
+	return r
 }
 
 // renderFrame is one frame of a page's render stream, without the SSE
 // encoding and compression.
 func (s *Server) renderFrame(r *http.Request, fn pageFunc, buf *bytes.Buffer) error {
-	v, user, err := s.load(r.Context(), r, "benchtab0000", fn)
-	if err != nil {
-		return err
-	}
-	buf.Reset()
-	sh := s.shell(r, user, v)
-	return ui.App(sh, v.Body(sh)).Render(r.Context(), buf)
+	return s.q.View(r.Context(), func(rd *queries.Reader) error {
+		v, user, err := s.load(r.Context(), rd, r, "benchtab0000", fn)
+		if err != nil {
+			return err
+		}
+		buf.Reset()
+		sh := s.shell(r, user, v)
+		return ui.App(sh, v.Body(sh)).Render(r.Context(), buf)
+	})
 }
 
 // BenchmarkRenderFrame measures one stream frame of each page; with
@@ -160,3 +170,31 @@ type discard struct{ h http.Header }
 func (d discard) Header() http.Header         { return d.h }
 func (d discard) Write(b []byte) (int, error) { return len(b), nil }
 func (d discard) WriteHeader(int)             {}
+
+// BenchmarkStreamFrame measures a stream's frame as the hub renders it:
+// the page and its patch event, uncompressed.
+func BenchmarkStreamFrame(b *testing.B) {
+	s := newBenchServer(b)
+	for _, p := range s.renderPages() {
+		b.Run(p.name, func(b *testing.B) {
+			r := frameRequest(p.path)
+			frame := func() int {
+				var n int
+				if err := s.q.View(r.Context(), func(rd *queries.Reader) error {
+					ev, err := s.frame(r.Context(), rd, r, "benchtab0000", p.fn)
+					n = len(ev)
+					return err
+				}); err != nil {
+					b.Fatal(err)
+				}
+				return n
+			}
+			b.SetBytes(int64(frame()))
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				frame()
+			}
+		})
+	}
+}

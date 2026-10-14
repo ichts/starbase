@@ -12,7 +12,7 @@ require (
 	github.com/starfederation/datastar-go v1.2.2
 	github.com/tdewolff/minify/v2 v2.24.19
 	github.com/yuin/goldmark v1.8.6
-	github.com/zweiundeins/lith v0.1.1
+	github.com/zweiundeins/lith v0.1.2-0.20261014094515-e775a415a8a4
 	go.abhg.dev/goldmark/frontmatter v0.3.0
 	golang.org/x/oauth2 v0.37.0
 	golang.org/x/sys v0.49.0

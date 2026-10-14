@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/a-h/templ"
 
@@ -59,6 +60,8 @@ type Shell struct {
 	Canonical   string // absolute URL of the page, without query
 	SocialImage string // absolute URL of the Open Graph image
 	JSONLD      string // schema.org JSON-LD
+	// Heartbeat is how often the render stream patches $_ping (Watchdog).
+	Heartbeat time.Duration
 }
 
 type navItem struct{ Key, Label, Href string }
@@ -94,6 +97,20 @@ const StreamID = "stream"
 // event stream marks the request, so a refusal for good can answer it with
 // 204, which 'error' does not repeat (it repeats every 4xx).
 const streamInit = `@post(location.pathname + location.search, {retry: 'error', retryMaxCount: Infinity, retryInterval: 400, retryMaxWait: 4000, openWhenHidden: false, headers: {Accept: 'text/event-stream'}})`
+
+// PingSignal is the signal the render stream's heartbeat patches
+// (live.Options.HeartbeatSignal), with a number that grows.
+const PingSignal = "_ping"
+
+// watchdogTick runs once a heartbeat and re-creates #stream, as sse.Reconnect
+// does, after 3 to 4 heartbeats without a ping (a hidden tab's stream is closed on purpose).
+const watchdogTick = `$_quiet = document.hidden || $_ping !== $_seen ? 0 : $_quiet + 1; $_seen = $_ping; ` +
+	`$_quiet > 3 && ($_quiet = 0, document.getElementById('` + StreamID + `').replaceWith(document.getElementById('` + StreamID + `').cloneNode(true)))`
+
+// watchdogInterval is the data-on-interval attribute that ticks once a heartbeat.
+func watchdogInterval(heartbeat time.Duration) string {
+	return "data-on-interval__duration." + strconv.FormatInt(heartbeat.Milliseconds(), 10) + "ms"
+}
 
 // TelemetryID is the element that opens /demo/telemetry: the stream names it
 // in its last event when the server stops, like StreamID.

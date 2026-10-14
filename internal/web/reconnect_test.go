@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/klauspost/compress/zstd"
 	"github.com/zweiundeins/lith/sse"
 
+	"starbase/internal/config"
 	"starbase/internal/ui"
 )
 
@@ -220,5 +222,43 @@ func TestRenderStreamInBrotliWithoutZstd(t *testing.T) {
 	}
 	if got := s.hub.Budget().Stats().Streams; got["br q4 2^19"] != 1 {
 		t.Errorf("streams by tier %v, want one br q4 2^19 (app.HubOptions' BrotliWindow)", got)
+	}
+}
+
+// TestStreamPingsTheWatchdog: the render stream patches $_ping every
+// heartbeat, with a number that grows, and the page's watchdog ticks at the
+// same pace (the reopening itself: app's TestWatchdogReopensASilentStream).
+func TestStreamPingsTheWatchdog(t *testing.T) {
+	s := startServerWith(t, config.Config{Heartbeat: 100 * time.Millisecond})
+	_, body := get(t, s.c, s.ts.URL+"/")
+	if !strings.Contains(body, `data-on-interval__duration.100ms="$_quiet = document.hidden`) {
+		t.Error("the page has no watchdog on the heartbeat's pace")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, s.ts.URL+"/", strings.NewReader(`{"tabid":"pingtab1"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	req.Header.Set("Accept-Encoding", "identity")
+	res, err := s.c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	ping := regexp.MustCompile(`^data: signals \{"_ping":(\d+)\}$`)
+	sc := bufio.NewScanner(res.Body)
+	sc.Buffer(make([]byte, 1<<20), 8<<20)
+	var pings []int64
+	for len(pings) < 3 && sc.Scan() {
+		if m := ping.FindStringSubmatch(sc.Text()); m != nil {
+			n, _ := strconv.ParseInt(m[1], 10, 64)
+			pings = append(pings, n)
+		}
+	}
+	if len(pings) < 3 {
+		t.Fatalf("pings %v: %v", pings, sc.Err())
+	}
+	if !(pings[0] < pings[1] && pings[1] < pings[2]) {
+		t.Errorf("pings %v do not grow", pings)
 	}
 }

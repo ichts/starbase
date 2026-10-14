@@ -24,6 +24,7 @@ import (
 	"starbase/internal/db"
 	"starbase/internal/queries"
 	"starbase/internal/tscheck"
+	"starbase/internal/ui"
 	"starbase/internal/web"
 	"starbase/static"
 )
@@ -43,9 +44,10 @@ const MemoryLimit = 256 << 20
 
 // HubOptions configure the render loop. Brotli's window is 2^19, not
 // lith's 2^18: a gallery frame's delta took 174 B instead of 522 B, for
-// 0.5 MiB more per brotli stream.
-func HubOptions(read *sql.DB, log *slog.Logger) live.Options {
-	return live.Options{Read: read, Log: log, MaxStreams: maxStreams, SSE: sse.Options{
+// 0.5 MiB more per brotli stream. Every heartbeat patches $_ping, which the
+// page's watchdog (ui.Watchdog) waits for.
+func HubOptions(read *sql.DB, log *slog.Logger, heartbeat time.Duration) live.Options {
+	return live.Options{Read: read, Log: log, MaxStreams: maxStreams, Heartbeat: heartbeat, HeartbeatSignal: ui.PingSignal, SSE: sse.Options{
 		ZstdLevel: zstd.SpeedFastest, ZstdWindow: 19, ZstdLowMemory: true,
 		BrotliWindow: 19,
 	}}
@@ -78,7 +80,7 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error)
 	if err != nil {
 		return nil, err
 	}
-	hub := live.New(HubOptions(database.R, log))
+	hub := live.New(HubOptions(database.R, log, cfg.StreamHeartbeat()))
 	w, err := writer.New(database, writer.Options{OnCommit: hub.Changed, Log: log})
 	if err != nil {
 		database.Close()

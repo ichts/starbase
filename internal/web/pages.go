@@ -117,6 +117,7 @@ func (s *Server) shell(req *http.Request, user *model.User, v view) ui.Shell {
 		Canonical:    strings.TrimSuffix(s.cfg.BaseURL, "/") + req.URL.Path,
 		SocialImage:  strings.TrimSuffix(s.cfg.BaseURL, "/") + "/og.png",
 		JSONLD:       s.jsonLD(v),
+		Heartbeat:    s.cfg.StreamHeartbeat(),
 	}
 }
 

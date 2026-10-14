@@ -62,6 +62,12 @@ type testServer struct {
 
 func startServer(t *testing.T) testServer {
 	t.Helper()
+	return startServerWith(t, config.Config{})
+}
+
+// startServerWith is startServer on cfg, with its URLs filled in.
+func startServerWith(t *testing.T, cfg config.Config) testServer {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -74,7 +80,7 @@ func startServer(t *testing.T) testServer {
 	if err != nil {
 		t.Fatal(err)
 	}
-	hub := live.New(app.HubOptions(d.R, log)) // production's, streams' compression included
+	hub := live.New(app.HubOptions(d.R, log, cfg.StreamHeartbeat())) // production's
 	hubDone := make(chan struct{})
 	go func() { hub.Run(ctx); close(hubDone) }()
 	t.Cleanup(func() { cancel(); <-hubDone })
@@ -92,7 +98,7 @@ func startServer(t *testing.T) testServer {
 	}
 	ts := httptest.NewUnstartedServer(nil)
 	ts.Start()
-	cfg := config.Config{BaseURL: ts.URL, RepoURL: "https://example.com/repo"}
+	cfg.BaseURL, cfg.RepoURL = ts.URL, "https://example.com/repo"
 	srv := web.New(ctx, web.Deps{Config: cfg, Log: log, Writer: wr, Hub: hub, Queries: queries.New(d),
 		Catalog: cat, StaticFS: static.FS, Content: content.FS, Checker: tscheck.New(t.TempDir())})
 	ts.Config.Handler = srv.Handler()

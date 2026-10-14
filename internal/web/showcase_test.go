@@ -270,7 +270,7 @@ func startBench(b *testing.B, streams int) *benchApp {
 	if err != nil {
 		b.Fatal(err)
 	}
-	hub := live.New(app.HubOptions(d.R, log))
+	hub := live.New(app.HubOptions(d.R, log, config.Config{}.StreamHeartbeat()))
 	hubDone := make(chan struct{})
 	go func() { hub.Run(ctx); close(hubDone) }()
 	wr, err := writer.New(d, writer.Options{OnCommit: hub.Changed, Log: log})

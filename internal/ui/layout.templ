@@ -63,6 +63,7 @@ templ Document(s Shell, body templ.Component) {
 		</head>
 		<body data-signals={ s.Signals }>
 			<div id={ StreamID } hidden data-init={ streamInit }></div>
+			<div hidden data-signals="{_ping: 0, _seen: 0, _quiet: 0}" { templ.Attributes{watchdogInterval(s.Heartbeat): watchdogTick}... }></div>
 			@App(s, body)
 		</body>
 	</html>

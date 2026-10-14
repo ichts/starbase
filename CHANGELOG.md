@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-14
+
+The server runs on lith: memory caps the live streams, every stream is compressed, and pages reconnect after a deploy. Every component also ships as one file, `sb-select` fits a toolbar, `sb-select`, `sb-dropdown` and `sb-date-picker` can be restyled to match it, and `--sb-notch: 0` turns every pixel detail smooth. Pages render faster, file storage shrinks to a third, and Go 1.27.2 closes three `net/http` vulnerabilities.
+
 ### Added
 
 - `sb-kanban-board` landing markers: with `data-kanban-landing`, a drop the server hasn't confirmed opens a gap at the drop slot with a marker the size of the card, until the card arrives there, the page calls `releaseLanding()` (after a refused move) or `data-kanban-landing-timeout` passes; each end emits `sb-kanban-landing-end {cardId, col, reason}`. Keyboard drops and lane moves get one too. The marker shows what the person did, never a guess at the result, and it costs no more than a drop without one.
@@ -345,7 +349,8 @@ The first release: a community gallery of Rocket web components for Datastar.
 
 - Datastar's morph is not re-entrant with Rocket components that are reordered by id. See `docs/repro/rocket-morph-reentrancy/` for a minimal reproduction and a proposed upstream fix. Starbase avoids the pattern.
 
-[Unreleased]: https://github.com/zweiundeins/starbase/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/zweiundeins/starbase/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/zweiundeins/starbase/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/zweiundeins/starbase/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/zweiundeins/starbase/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/zweiundeins/starbase/compare/v0.4.0...v0.5.0

@@ -244,6 +244,10 @@ func (s *Server) stream(fn pageFunc, regions []*region) http.HandlerFunc {
 		defer s.streamCap.release(client)
 		err := s.hub.Serve(w, r, spec)
 		switch {
+		case errors.Is(err, sse.ErrNoRoom):
+			st := s.hub.Budget().Stats()
+			s.roomWarn.warn(s.log, "render stream refused: the streams' budget is full", "path", r.URL.Path,
+				"streams", s.hub.Stats().Streams, "reserved_mib", st.Reserved>>20, "limit_mib", st.Limit>>20, "refused", st.Refused)
 		case errors.Is(err, live.ErrFull):
 			s.fullWarn.warn(s.log, "render stream refused: too many open", "path", r.URL.Path)
 		case err != nil && !errors.Is(err, live.ErrStopped):

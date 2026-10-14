@@ -29,35 +29,30 @@ import (
 	"starbase/static"
 )
 
-// Memory for deploy/starbase.service's MemoryMax=384M, measured on
-// 2026-10-13 with the production binary: 105 MiB idle after warm-up, plus
-// 1.1 MiB of heap per open stream on /showcase to 1.36 MiB on
-// /components/data-table (the largest frame) with zstd's low-memory
-// history, 1.7 to 1.95 MiB without it. 105 + 150 × 1.36 = 309 MiB, 80% of
-// MemoryMax; the rest is for the type check's compiler (about 60 MB).
-const maxStreams = 150
-
 // MemoryLimit is the GC's soft limit, which main sets unless GOMEMLIMIT is
 // set. Without it the heap grows to twice what is live: 150 streams took
 // 449 to 494 MiB while the board was painted, 247 to 263 MiB with it.
 const MemoryLimit = 256 << 20
 
-// streamBudget is the heap the render streams' encoders may hold together,
-// with room under MemoryHigh for the type check's compiler (up to 192 MB).
-// Brotli streams keep their tier until they close, so lith gives them
-// smaller ones as it fills: 93 brotli-only streams compressed, the rest
-// uncompressed, 130 to 220 KB a frame (TestBrotliStreamsStayCompressed).
+// streamBudget caps the render streams by memory, not by a count: what
+// they may hold together as lith's budget books it, each stream's encoder,
+// 32 KiB besides and every view's newest frame. A tab that cannot have the
+// smallest tier gets 503, and its page asks again (retry 'error'). The rest
+// of MemoryHigh is for the app, the garbage between collections and the
+// type check's compiler (up to 192 MB).
 const streamBudget = 150 << 20
 
-// HubOptions configure the render loop. Brotli's window is 2^19, not
-// lith's 2^18: a gallery frame's delta took 174 B instead of 522 B, for
-// 0.5 MiB more per brotli stream. Every heartbeat patches $_ping, which the
-// page's watchdog (ui.Watchdog) waits for. Each call has a budget of its own.
+// HubOptions configure the render loop. The budget refuses the streams it
+// has no room for, so every stream it lets in compresses, and live's
+// MaxStreams (2000) is only a backstop. Each stream gets the smallest
+// window that holds its largest frame, up to 2^19. Every heartbeat patches
+// $_ping, which the page's watchdog (ui.Watchdog) waits for. Each call has
+// a budget of its own.
 func HubOptions(read *sql.DB, log *slog.Logger, heartbeat time.Duration) live.Options {
-	return live.Options{Read: read, Log: log, MaxStreams: maxStreams, Heartbeat: heartbeat, HeartbeatSignal: ui.PingSignal, SSE: sse.Options{
+	return live.Options{Read: read, Log: log, Heartbeat: heartbeat, HeartbeatSignal: ui.PingSignal, SSE: sse.Options{
 		ZstdLevel: zstd.SpeedFastest, ZstdWindow: 19, ZstdLowMemory: true,
 		BrotliWindow: 19,
-		Budget:       sse.NewBudget(sse.BudgetOptions{Limit: streamBudget}),
+		Budget:       sse.NewBudget(sse.BudgetOptions{Limit: streamBudget, Refuse: true}),
 	}}
 }
 

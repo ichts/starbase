@@ -196,7 +196,8 @@ func TestStreamRefusalsAre204(t *testing.T) {
 }
 
 // TestRenderStreamInBrotliWithoutZstd: a browser that takes brotli but not
-// zstd (Safari) gets its render stream in brotli. With ZstdLowMemory, lith
+// zstd (Safari) gets its render stream in brotli, at quality 4 and the
+// window that holds its frame, and keeps it. With ZstdLowMemory, lith
 // v0.1.0's budget sent it uncompressed.
 func TestRenderStreamInBrotliWithoutZstd(t *testing.T) {
 	s := startServer(t)
@@ -220,8 +221,15 @@ func TestRenderStreamInBrotliWithoutZstd(t *testing.T) {
 	if err != nil || !strings.HasPrefix(line, "event: ") {
 		t.Errorf("first line %q, %v", line, err)
 	}
-	if got := s.hub.Budget().Stats().Streams; got["br q4 2^19"] != 1 {
-		t.Errorf("streams by tier %v, want one br q4 2^19 (app.HubOptions' BrotliWindow)", got)
+	st := s.hub.Budget().Stats()
+	q4 := 0
+	for k, n := range st.Streams {
+		if strings.HasPrefix(k, "br q4 2^") {
+			q4 += n
+		}
+	}
+	if q4 != 1 || len(st.Streams) != 1 || st.Reopened != 0 {
+		t.Errorf("streams by tier %v, %d asked to open again; want one at br q4 (the window that holds the gallery's frame), kept", st.Streams, st.Reopened)
 	}
 }
 

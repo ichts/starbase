@@ -65,7 +65,8 @@ type Server struct {
 
 	streamCap *streamCap // render streams per client
 	capWarn   quietWarn  // clients at their cap
-	fullWarn  quietWarn  // the hub at MaxStreams
+	roomWarn  quietWarn  // the streams' budget full: memory caps the streams
+	fullWarn  quietWarn  // the hub at MaxStreams, a backstop
 }
 
 type Deps struct {

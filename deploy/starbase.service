@@ -29,7 +29,7 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 
 # Public and unauthenticated (pixel board, playground): keep it well away
 # from the other services' memory. internal/app plans for up to 80% of
-# MemoryMax (maxStreams, MemoryLimit); MemoryHigh throttles only past that.
+# MemoryMax (streamBudget, MemoryLimit); MemoryHigh throttles only past that.
 MemoryHigh=320M
 MemoryMax=384M
 TasksMax=256

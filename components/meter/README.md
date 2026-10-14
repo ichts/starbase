@@ -49,7 +49,7 @@ The whole bar changes colour at the `warn` and `danger` thresholds, given in val
 
 ```html preview
 <div data-signals="{_tm: {fuel: 100}}" style="inline-size: min(100%, 22rem)">
-  <div id="telemetry" hidden data-init="@get('/demo/telemetry', {retry: 'error', retryMaxCount: Infinity})"></div>
+  <div id="telemetry" hidden data-init="@get('/demo/telemetry', {retry: 'error', retryMaxCount: Infinity, retryInterval: 400, retryMaxWait: 4000})"></div>
   <sb-meter label="Fuel" unit="%" warn="30" danger="15" segments="20" data-attr:value="Math.round($_tm.fuel)" data-preserve-attr="value"></sb-meter>
 </div>
 ```

@@ -31,7 +31,7 @@ func (s *Server) demoTelemetry(w http.ResponseWriter, r *http.Request) {
 	telemetryHTML = catalog.Highlight(`<section data-ignore-morph
   data-signals="{_tm: {alt: 0, vel: 0, fuel: 100, temp: 18, pitch: 90}}">
   <div id="telemetry" hidden
-       data-init="@get('/demo/telemetry', {retry: 'error', retryMaxCount: Infinity})"></div>
+       data-init="@get('/demo/telemetry', {retry: 'error', retryMaxCount: Infinity, retryInterval: 400, retryMaxWait: 4000})"></div>
 
   <sb-starfield data-attr:speed="Math.round(3 + $_tm.vel * 11)"
                 data-attr:warp="$_tm.vel > 5"></sb-starfield>

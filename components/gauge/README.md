@@ -45,7 +45,7 @@ This site's demo endpoint streams telemetry as signal patches. The gauge follows
 
 ```html preview
 <div data-signals="{_tm: {vel: 0, temp: 18}}" style="display: flex; gap: 32px; flex-wrap: wrap">
-  <div id="telemetry" hidden data-init="@get('/demo/telemetry', {retry: 'error', retryMaxCount: Infinity})"></div>
+  <div id="telemetry" hidden data-init="@get('/demo/telemetry', {retry: 'error', retryMaxCount: Infinity, retryInterval: 400, retryMaxWait: 4000})"></div>
   <sb-gauge label="Velocity" unit=" km/s" max="8" warn="9" danger="10" decimals="2" data-attr:value="$_tm.vel" data-preserve-attr="value"></sb-gauge>
   <sb-gauge label="Hull" unit="°C" max="1200" warn="800" danger="1000" data-attr:value="$_tm.temp" data-preserve-attr="value"></sb-gauge>
 </div>

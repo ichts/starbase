@@ -51,7 +51,7 @@ The server pushes `$_tm.alt` four times a second. Push mode turns every change i
 
 ```html preview
 <div data-signals="{_tm: {alt: 0}}">
-  <div id="telemetry" hidden data-init="@get('/demo/telemetry', {retry: 'error', retryMaxCount: Infinity})"></div>
+  <div id="telemetry" hidden data-init="@get('/demo/telemetry', {retry: 'error', retryMaxCount: Infinity, retryInterval: 400, retryMaxWait: 4000})"></div>
   <sb-sparkline data-attr:value="$_tm.alt" data-preserve-attr="value" length="80" show-value unit=" km" tone="accent" label="Altitude" style="--sb-sparkline-width: 22rem"></sb-sparkline>
 </div>
 ```

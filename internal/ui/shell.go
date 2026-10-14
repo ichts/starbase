@@ -100,7 +100,7 @@ const streamInit = `@post(location.pathname + location.search, {retry: 'error', 
 const TelemetryID = "telemetry"
 
 // telemetryInit opens Mission Control's telemetry, like the docs examples.
-const telemetryInit = `@get('/demo/telemetry', {retry: 'error', retryMaxCount: Infinity})`
+const telemetryInit = `@get('/demo/telemetry', {retry: 'error', retryMaxCount: Infinity, retryInterval: 400, retryMaxWait: 4000})`
 
 // searchFromAnywhere sends typing on non-gallery pages to the gallery.
 const searchFromAnywhere = `el.value.trim() && (window.location.href = '/?q=' + encodeURIComponent(el.value.trim()))`

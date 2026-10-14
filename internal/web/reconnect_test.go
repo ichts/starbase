@@ -139,7 +139,7 @@ func TestTelemetryOpensFromItsElement(t *testing.T) {
 	if len(pages) < 4 {
 		t.Fatalf("pages with the telemetry: %v, want the Showcase and the gauge, meter and sparkline docs", pages)
 	}
-	want := `<div id="telemetry" hidden data-init="@get('/demo/telemetry', {retry: 'error', retryMaxCount: Infinity})"></div>`
+	want := `<div id="telemetry" hidden data-init="@get('/demo/telemetry', {retry: 'error', retryMaxCount: Infinity, retryInterval: 400, retryMaxWait: 4000})"></div>`
 	opener := regexp.MustCompile(`<[^<>]*@get\('/demo/telemetry'[^<>]*>(</div>)?`)
 	for _, p := range pages {
 		_, body := get(t, c, ts.URL+p)

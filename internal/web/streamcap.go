@@ -6,11 +6,12 @@ import (
 	"time"
 )
 
-// maxStreamsPerClient is how many render streams one client (edge.ClientKey)
-// may hold open, so that no one takes all of the hub's. A browser closes the
-// stream of a hidden tab, so a person needs one per window; 12 leaves room
-// for a few people behind one address.
-const maxStreamsPerClient = 12
+// maxStreamsPerClient is how many render streams one client (edge.ClientKey:
+// an IPv4 address, an IPv6 /64) may hold open, so that no one takes all of
+// the hub's. A browser closes the stream of a hidden tab, so a person needs
+// one per window; 24 leaves room for the people behind a shared address
+// (carrier-grade NAT, an office, conference Wi-Fi).
+const maxStreamsPerClient = 24
 
 // streamCap counts the open render streams of each client.
 type streamCap struct {

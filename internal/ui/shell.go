@@ -102,10 +102,14 @@ const streamInit = `@post(location.pathname + location.search, {retry: 'error', 
 // (live.Options.HeartbeatSignal), with a number that grows.
 const PingSignal = "_ping"
 
+// QuietSignal counts the watchdog's ticks without a new ping; a stream's
+// first write resets it, since its first ping comes a heartbeat later.
+const QuietSignal = "_quiet"
+
 // watchdogTick runs once a heartbeat and re-creates #stream, as sse.Reconnect
 // does, after 3 to 4 heartbeats without a ping (a hidden tab's stream is closed on purpose).
 const watchdogTick = `$_quiet = document.hidden || $_ping !== $_seen ? 0 : $_quiet + 1; $_seen = $_ping; ` +
-	`$_quiet > 3 && ($_quiet = 0, document.getElementById('` + StreamID + `').replaceWith(document.getElementById('` + StreamID + `').cloneNode(true)))`
+	`$_quiet > 2 && ($_quiet = 0, document.getElementById('` + StreamID + `').replaceWith(document.getElementById('` + StreamID + `').cloneNode(true)))`
 
 // watchdogInterval is the data-on-interval attribute that ticks once a heartbeat.
 func watchdogInterval(heartbeat time.Duration) string {

@@ -32,9 +32,9 @@ type Config struct {
 	Version string // set by main from build flags
 }
 
-// StreamHeartbeat is Heartbeat, 10 s unless set. The page reopens a stream
+// StreamHeartbeat is Heartbeat, 5 s unless set. The page reopens a stream
 // that misses three.
-func (c Config) StreamHeartbeat() time.Duration { return cmp.Or(c.Heartbeat, 10*time.Second) }
+func (c Config) StreamHeartbeat() time.Duration { return cmp.Or(c.Heartbeat, 5*time.Second) }
 
 // Load reads configuration from the environment, after filling unset
 // variables from a .env file in the working directory, if present.

@@ -233,9 +233,7 @@ func (s *Server) stream(fn pageFunc, regions []*region) http.HandlerFunc {
 		for _, rg := range regions {
 			spec.Views = append(spec.Views, rg.view)
 		}
-		if len(regions) > 0 {
-			spec.WriteTick = fillHoles(tab.Key, regions)
-		}
+		spec.WriteTick = resetWatchdog(fillHoles(tab.Key, regions))
 		client := edge.ClientKey(r)
 		if !s.streamCap.acquire(client) {
 			// retry 'error' asks again, as it does after the hub's 503.

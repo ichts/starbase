@@ -265,7 +265,9 @@ func TestRenderStream(t *testing.T) {
 		var frame strings.Builder
 		for sc.Scan() {
 			if sc.Text() == "" && frame.Len() > 0 {
-				frames <- frame.String()
+				if !strings.HasPrefix(frame.String(), "event: datastar-patch-signals") { // the watchdog's
+					frames <- frame.String()
+				}
 				frame.Reset()
 				continue
 			}
@@ -438,7 +440,9 @@ func TestShareFlow(t *testing.T) {
 		var f strings.Builder
 		for sc.Scan() {
 			if sc.Text() == "" && f.Len() > 0 {
-				frames <- f.String()
+				if !strings.HasPrefix(f.String(), "event: datastar-patch-signals") { // the watchdog's
+					frames <- f.String()
+				}
 				f.Reset()
 				continue
 			}

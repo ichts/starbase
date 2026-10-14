@@ -226,8 +226,9 @@ func TestRenderStreamInBrotliWithoutZstd(t *testing.T) {
 }
 
 // TestStreamPingsTheWatchdog: the render stream patches $_ping every
-// heartbeat, with a number that grows, and the page's watchdog ticks at the
-// same pace (the reopening itself: app's TestWatchdogReopensASilentStream).
+// heartbeat, with a number that grows, after its first write resets the
+// watchdog's count, and the page's watchdog ticks at the same pace (the
+// reopening itself: app's TestWatchdogReopensASilentStream).
 func TestStreamPingsTheWatchdog(t *testing.T) {
 	s := startServerWith(t, config.Config{Heartbeat: 100 * time.Millisecond})
 	_, body := get(t, s.c, s.ts.URL+"/")
@@ -249,7 +250,9 @@ func TestStreamPingsTheWatchdog(t *testing.T) {
 	sc := bufio.NewScanner(res.Body)
 	sc.Buffer(make([]byte, 1<<20), 8<<20)
 	var pings []int64
+	reset := false
 	for len(pings) < 3 && sc.Scan() {
+		reset = reset || len(pings) == 0 && sc.Text() == `data: signals {"_quiet":0}`
 		if m := ping.FindStringSubmatch(sc.Text()); m != nil {
 			n, _ := strconv.ParseInt(m[1], 10, 64)
 			pings = append(pings, n)
@@ -260,5 +263,8 @@ func TestStreamPingsTheWatchdog(t *testing.T) {
 	}
 	if !(pings[0] < pings[1] && pings[1] < pings[2]) {
 		t.Errorf("pings %v do not grow", pings)
+	}
+	if !reset {
+		t.Error("no reset of $_quiet before the first ping")
 	}
 }

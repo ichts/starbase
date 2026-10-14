@@ -10,6 +10,7 @@ import (
 	"github.com/zweiundeins/lith/sse"
 
 	"starbase/internal/queries"
+	"starbase/internal/ui"
 )
 
 // A region is a part of a page that a view of its own renders once for
@@ -61,8 +62,8 @@ func (rc *renderCtx) region(r *region) (templ.Component, error) {
 	return templ.Raw("\n" + string(html) + "\n"), nil
 }
 
-// fillHoles is the WriteTick of a tab's stream on a page with regions:
-// each frame of the page (the view with key page) goes out with its holes
+// fillHoles is the WriteTick of a tab's stream (without regions, it writes
+// the frames as they are). On a page with regions, each frame of the page (the view with key page) goes out with its holes
 // filled by the newest frame of each region on this stream, or the
 // region's shell before its first. A region's frame goes out as well, also
 // after a page frame that carries it, where its morph changes nothing.
@@ -101,6 +102,23 @@ func fillHoles(page string, regions []*region) func(*sse.Stream, []live.Frame) e
 		clear(out)
 		out = out[:0]
 		return err
+	}
+}
+
+// watchdogReset sets the page's watchdog counter (ui.QuietSignal) to zero.
+var watchdogReset = sse.PatchSignals([]byte(`{"`+ui.QuietSignal+`":0}`), false)
+
+// resetWatchdog sends watchdogReset after the stream's first frames: after an
+// outage the counter may be one tick short of firing, and lith's first ping
+// comes a heartbeat after the stream opens.
+func resetWatchdog(write func(*sse.Stream, []live.Frame) error) func(*sse.Stream, []live.Frame) error {
+	first := true
+	return func(st *sse.Stream, frames []live.Frame) error {
+		if first {
+			first = false
+			frames = append(frames[:len(frames):len(frames)], live.Frame{Value: watchdogReset})
+		}
+		return write(st, frames)
 	}
 }
 

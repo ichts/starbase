@@ -31,6 +31,7 @@ func TestStreamsReconnectAfterDeploy(t *testing.T) {
 	}
 	base := "http://" + ln.Addr().String()
 	d := &deploy{cfg: appConfig(t, base), refused: map[string]int{}}
+	copySeeded(t, d.cfg.DBPath) // a fresh database's seeding holds the first command for seconds under -race
 	if err := d.start(); err != nil {
 		t.Fatal(err)
 	}

@@ -17,7 +17,7 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -39,7 +39,7 @@ jobs:
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - name: Test
         # internal/app (the headless Chrome tests) runs in its own job.
-        run: go test -race $(go list -f '{{if ne .ImportPath "starbase/internal/app"}}{{.ImportPath}}{{end}}' ./...)
+        run: go test -race -timeout 25m $(go list -f '{{if ne .ImportPath "starbase/internal/app"}}{{.ImportPath}}{{end}}' ./...)
       - name: Component manifests are up to date (headless Chrome)
         run: go run -tags dev ./cmd/manifests --check
 

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"log/slog"
 	"maps"
@@ -204,6 +205,11 @@ func join(b *testing.B, ctx context.Context, client *http.Client, url, path, tab
 	req.Header.Set("Datastar-Request", "true")
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	req.Header.Set("Accept-Encoding", accept)
+	// Each tab is a client of its own, below the cap per client.
+	h := fnv.New32a()
+	h.Write([]byte(tabID))
+	n := h.Sum32()
+	req.Header.Set("X-Forwarded-For", fmt.Sprintf("10.%d.%d.%d", n>>16&255, n>>8&255, n&255))
 	res, err := client.Do(req)
 	if err != nil {
 		b.Fatal(err)

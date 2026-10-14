@@ -62,6 +62,10 @@ type Server struct {
 	exportLimit   *limiter // the star catalog's downloads, per session
 	exportLimitIP *limiter
 	exports       chan struct{} // the downloads streaming now, each holding a read connection
+
+	streamCap *streamCap // render streams per client
+	capWarn   quietWarn  // clients at their cap
+	fullWarn  quietWarn  // the hub at MaxStreams
 }
 
 type Deps struct {
@@ -111,6 +115,7 @@ func New(ctx context.Context, d Deps) *Server {
 		exportLimit:   newLimiter(0.2, 3), // a download every five seconds, three in a row
 		exportLimitIP: newLimiter(1, 10),
 		exports:       make(chan struct{}, 2), // the read pool has at least four
+		streamCap:     newStreamCap(maxStreamsPerClient),
 	}
 	s.oauth = newOAuth(d.Config)
 	s.cache = newRenderCache(s)

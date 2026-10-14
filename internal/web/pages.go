@@ -235,10 +235,18 @@ func (s *Server) stream(fn pageFunc, regions []*region) http.HandlerFunc {
 		if len(regions) > 0 {
 			spec.WriteTick = fillHoles(tab.Key, regions)
 		}
+		client := edge.ClientKey(r)
+		if !s.streamCap.acquire(client) {
+			// retry 'error' asks again, as it does after the hub's 503.
+			http.Error(w, "too many streams from this client", http.StatusTooManyRequests)
+			s.capWarn.warn(s.log, "render stream refused: a client at its cap", "client", client, "cap", maxStreamsPerClient)
+			return
+		}
+		defer s.streamCap.release(client)
 		err := s.hub.Serve(w, r, spec)
 		switch {
 		case errors.Is(err, live.ErrFull):
-			s.log.Warn("render stream refused: too many open", "path", r.URL.Path)
+			s.fullWarn.warn(s.log, "render stream refused: too many open", "path", r.URL.Path)
 		case err != nil && !errors.Is(err, live.ErrStopped):
 			s.log.Debug("render stream ended", "path", r.URL.Path, "err", err)
 		}

@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/a-h/templ"
 
@@ -153,11 +154,24 @@ func siteThemes() string {
 // Art inlines a pixel art illustration: decorative, with the given classes.
 // It keeps its proportions, standing on the bottom of its box.
 func Art(a Assets, name, class string) templ.Component {
-	svg := a.ArtSVG(name)
-	svg = strings.Replace(svg, `<svg xmlns="http://www.w3.org/2000/svg" class="px-art"`,
+	src := a.ArtSVG(name)
+	key := artKey{name, class}
+	if e, ok := inlineArt.Load(key); ok && e.(artEntry).src == src {
+		return templ.Raw(e.(artEntry).svg)
+	}
+	svg := strings.Replace(src, `<svg xmlns="http://www.w3.org/2000/svg" class="px-art"`,
 		`<svg xmlns="http://www.w3.org/2000/svg" class="px-art `+class+`" aria-hidden="true" focusable="false" preserveAspectRatio="xMidYMax meet"`, 1)
+	inlineArt.Store(key, artEntry{src, svg})
 	return templ.Raw(svg)
 }
+
+// inlineArt keeps Art's markup per illustration and classes (a handful of
+// call sites), checked against the source it was made from.
+var inlineArt sync.Map // artKey → artEntry
+
+type artKey struct{ name, class string }
+
+type artEntry struct{ src, svg string }
 
 func onOff(b bool) string {
 	if b {

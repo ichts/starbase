@@ -27,6 +27,7 @@ import (
 type assets struct {
 	static      *hashfs.FS
 	art         map[string]generated
+	artSVG      map[string]string // the same as strings, for inlining without a copy
 	catalog     *catalog.Catalog
 	components  generated            // /c/index.js: imports every component module
 	bundle      generated            // /c/bundle.js: every component in one file
@@ -50,9 +51,10 @@ func hashOf(b []byte) string {
 }
 
 func newAssets(staticFS fs.FS, cat *catalog.Catalog, dev bool) *assets {
-	a := &assets{static: hashfs.NewFS(staticFS), art: map[string]generated{}, catalog: cat, dev: dev}
+	a := &assets{static: hashfs.NewFS(staticFS), art: map[string]generated{}, artSVG: map[string]string{}, catalog: cat, dev: dev}
 	for name, svg := range pixelart.All() {
 		a.art[name] = generated{body: []byte(svg), hash: hashOf([]byte(svg))}
+		a.artSVG[name] = svg
 	}
 	var js strings.Builder
 	// The readable modules: the manifest publisher needs their .docs() and
@@ -201,7 +203,7 @@ func (a *assets) useBundle(r *http.Request) bool {
 // the dev manifest publisher needs them all, with their docs.
 func (a *assets) AllComponents() string { return "/c/index.js?v=" + a.components.hash }
 
-func (a *assets) ArtSVG(name string) string { return string(a.art[name].body) }
+func (a *assets) ArtSVG(name string) string { return a.artSVG[name] }
 
 var svgSizeRe = regexp.MustCompile(`<svg[^>]* width="(\d+)" height="(\d+)"`)
 

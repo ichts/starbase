@@ -145,9 +145,9 @@ func residentSet() uint64 {
 // each retrying a 503 as the page does, until the budget of 150 MiB turns
 // one away for good. Every stream it lets in compresses (none goes out
 // uncompressed or in raw blocks). On the data table's page, the largest,
-// that is about 130 tabs with zstd and 97 with brotli only (each tab's
-// view holds a frame of 230 KB); once three close, the tab turned away gets
-// in. On a page with small frames more than 150 get in. The heartbeat is
+// that is about 168 tabs with zstd and 114 with brotli only (a tab's own
+// view keeps no frame once its stream has it); once three close, the tab
+// turned away gets in. On a page with small frames more than 150 get in. The heartbeat is
 // 200 ms instead of 5 s: zstd streams move down to the window their frames
 // need at their next write after a stream found no room, and the ping is
 // what they write while the page is still.
@@ -161,8 +161,8 @@ func TestStreamBudgetCapsTabs(t *testing.T) {
 		name, path, ae string
 		least, most    int // tabs in when full
 	}{
-		{"data table, zstd", "/components/data-table", zstdOrBr, 120, 145},
-		{"data table, brotli", "/components/data-table", brOnly, 90, 105},
+		{"data table, zstd", "/components/data-table", zstdOrBr, 150, 185},
+		{"data table, brotli", "/components/data-table", brOnly, 105, 125},
 		{"small frames, zstd", "/about", zstdOrBr, 151, 400},
 	} {
 		t.Run(c.name, func(t *testing.T) {

@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/a-h/templ"
 	"github.com/starfederation/datastar-go/datastar"
@@ -278,12 +279,25 @@ func (s *Server) frame(ctx context.Context, rd *queries.Reader, req *http.Reques
 	if err != nil {
 		return nil, err
 	}
-	var buf bytes.Buffer
+	buf := frameBufs.Get().(*bytes.Buffer)
+	defer putFrameBuf(buf)
 	sh := s.shell(req, user, v)
-	if err := ui.App(sh, v.Body(sh)).Render(ctx, &buf); err != nil {
+	if err := ui.App(sh, v.Body(sh)).Render(ctx, buf); err != nil {
 		return nil, err
 	}
 	return sse.PatchElements(buf.Bytes()), nil
+}
+
+// frameBufs keep render buffers between frames: PatchElements copies the
+// HTML, and a buffer grown afresh made twice a frame's size in garbage.
+var frameBufs = sync.Pool{New: func() any { return new(bytes.Buffer) }}
+
+func putFrameBuf(b *bytes.Buffer) {
+	if b.Cap() > 1<<20 {
+		return
+	}
+	b.Reset()
+	frameBufs.Put(b)
 }
 
 func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error) {

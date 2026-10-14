@@ -12,7 +12,7 @@ require (
 	github.com/starfederation/datastar-go v1.2.2
 	github.com/tdewolff/minify/v2 v2.24.19
 	github.com/yuin/goldmark v1.8.6
-	github.com/zweiundeins/lith v0.0.0-00010101000000-000000000000
+	github.com/zweiundeins/lith v0.1.0
 	go.abhg.dev/goldmark/frontmatter v0.3.0
 	golang.org/x/oauth2 v0.37.0
 	golang.org/x/sys v0.49.0
@@ -175,5 +175,3 @@ tool (
 	github.com/air-verse/air
 	github.com/go-task/task/v3/cmd/task
 )
-
-replace github.com/zweiundeins/lith => /develop/lith

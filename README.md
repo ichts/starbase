@@ -176,3 +176,7 @@ CI runs vet, tests, the templ and manifest checks, govulncheck, cross-platform b
 ## Licences
 
 Code: [MIT](LICENSE), © [zwei und eins gmbh](https://zweiundeins.gmbh) and starbase contributors. Fonts: Pixelify Sans and JetBrains Mono (SIL OFL, see `static/fonts`). Icons: Lucide (ISC), GitHub mark (MIT, Octicons). Datastar + Rocket bundle: MIT, vendored in `static/vendor`. TypeScript compiler: Apache-2.0, embedded for the playground's type check; release archives carry its licence and notices in `typescript/`, the container image in `/usr/share/doc/typescript`.
+
+## Maintainer
+
+Maintained by [zwei und eins gmbh](https://zweiundeins.gmbh), Aarberg, Switzerland.

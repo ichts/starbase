@@ -44,6 +44,7 @@ func (s *Server) galleryPage(rc *renderCtx) (view, error) {
 			return ui.Gallery(sh, ui.GalleryView{Browse: b, DefaultSort: def, Result: res, Previews: previews, Sizes: sizes})
 		},
 		URL:        u,
+		LD:         s.cache.homeLD,
 		SearchLive: true,
 		Search:     b.Q,
 		Signals:    map[string]any{"q": b.Q, "cat": b.Category, "sort": string(b.Sort)},

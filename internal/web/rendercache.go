@@ -26,6 +26,7 @@ type renderCache struct {
 	themes map[string]func() themeCode // by preview theme, filled on first use
 	deps   func() string               // the playground's tag → script map, as JSON
 	siteLD func() string               // the JSON-LD of a page that adds no schema
+	homeLD func() string               // the homepage's: the site and the project
 }
 
 func newRenderCache(s *Server) *renderCache {
@@ -36,6 +37,7 @@ func newRenderCache(s *Server) *renderCache {
 		themes:   map[string]func() themeCode{},
 		deps:     sync.OnceValue(s.componentDeps),
 		siteLD:   sync.OnceValue(func() string { return s.buildJSONLD(nil) }),
+		homeLD:   sync.OnceValue(func() string { return s.buildJSONLD([]any{s.softwareLD()}) }),
 	}
 	for _, t := range model.PreviewThemes {
 		c.themes[t.Slug] = sync.OnceValue(func() themeCode { return s.buildThemeCode(t.Slug) })

@@ -37,6 +37,7 @@ type view struct {
 	Signals     map[string]any // initial page signals (full document only)
 	Status      int            // 0 = 200
 	Schema      []any          // extra JSON-LD objects (schema.org), after the site's
+	LD          func() string  // the page's whole JSON-LD, computed once (the homepage's), in place of Schema
 }
 
 // renderCtx is the input of a page render: one read snapshot plus who is
@@ -126,6 +127,9 @@ func (s *Server) shell(req *http.Request, user *model.User, v view) ui.Shell {
 // whatever the page adds (a component is SoftwareSourceCode). Pages that
 // add nothing share one string (rendercache.go).
 func (s *Server) jsonLD(v view) string {
+	if v.LD != nil {
+		return v.LD()
+	}
 	if len(v.Schema) == 0 {
 		return s.cache.siteLD()
 	}
@@ -145,10 +149,33 @@ func (s *Server) buildJSONLD(schema []any) string {
 			"target":      base + "/?q={search_term_string}",
 			"query-input": "required name=search_term_string",
 		},
+		"publisher": map[string]any{"@id": orgID},
 	}}
 	graph = append(graph, schema...)
 	b, _ := json.Marshal(map[string]any{"@context": "https://schema.org", "@graph": graph}) // escapes <, > and &
 	return string(b)
+}
+
+// orgID names zwei und eins gmbh in JSON-LD. The company is described only on
+// zweiundeins.gmbh; other sites refer to it by this @id.
+const orgID = "https://zweiundeins.gmbh/#organization"
+
+// softwareLD is the project itself, for the homepage's JSON-LD.
+func (s *Server) softwareLD() map[string]any {
+	base := strings.TrimSuffix(s.cfg.BaseURL, "/")
+	return map[string]any{
+		"@type":               "SoftwareSourceCode",
+		"@id":                 base + "/#software",
+		"name":                "Starbase",
+		"description":         "Community Components for Rocket: a gallery of Datastar Rocket web components.",
+		"url":                 base + "/",
+		"codeRepository":      s.cfg.RepoURL,
+		"programmingLanguage": []string{"Go", "TypeScript"},
+		"license":             "https://opensource.org/licenses/MIT",
+		"author":              map[string]any{"@type": "Organization", "@id": orgID, "name": "zwei und eins gmbh", "url": "https://zweiundeins.gmbh"},
+		"publisher":           map[string]any{"@id": orgID},
+		"maintainer":          map[string]any{"@id": orgID},
+	}
 }
 
 // siteTheme is the theme the sb-theme-switch in the header stored in its

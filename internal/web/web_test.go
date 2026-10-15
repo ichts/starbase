@@ -690,6 +690,29 @@ func TestSEO(t *testing.T) {
 			t.Errorf("%s: %d %s", p, r.StatusCode, r.Header.Get("Content-Type"))
 		}
 	}
+	// The homepage names the project and refers to the company by its @id only.
+	_, home := get(t, c, ts.URL+"/")
+	i := strings.Index(home, `<script type="application/ld+json"`)
+	j := strings.Index(home[i:], ">") + i + 1
+	k := strings.Index(home[j:], "</script>") + j
+	var ld struct {
+		Graph []map[string]any `json:"@graph"`
+	}
+	if err := json.Unmarshal([]byte(home[j:k]), &ld); err != nil || len(ld.Graph) != 2 {
+		t.Fatalf("homepage JSON-LD: %v %.300s", err, home[j:k])
+	}
+	if pub, _ := ld.Graph[0]["publisher"].(map[string]any); pub["@id"] != "https://zweiundeins.gmbh/#organization" || len(pub) != 1 {
+		t.Errorf("WebSite publisher = %v", ld.Graph[0]["publisher"])
+	}
+	sw := ld.Graph[1]
+	if sw["@type"] != "SoftwareSourceCode" || sw["@id"] != ts.URL+"/#software" || sw["maintainer"].(map[string]any)["@id"] != "https://zweiundeins.gmbh/#organization" {
+		t.Errorf("project = %v", sw)
+	}
+	for _, field := range []string{"address", "logo", "email", "sameAs"} {
+		if strings.Contains(home[j:k], `"`+field+`"`) {
+			t.Errorf("homepage JSON-LD repeats the company's %s", field)
+		}
+	}
 	_, page := get(t, c, ts.URL+"/components/button?x=1")
 	for _, want := range []string{
 		`<link rel="canonical" href="` + ts.URL + `/components/button">`,

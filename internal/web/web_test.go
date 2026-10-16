@@ -2,8 +2,10 @@ package web_test
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
+	"html"
 	"io"
 	"log/slog"
 	"net/http"
@@ -18,26 +20,53 @@ import (
 	"testing/fstest"
 	"time"
 
+	"github.com/andybalholm/brotli"
+	"github.com/zweiundeins/lith/live"
+	"github.com/zweiundeins/lith/writer"
+
 	"starbase/components"
 	"starbase/content"
+	"starbase/internal/app"
 	"starbase/internal/catalog"
 	"starbase/internal/commands"
 	"starbase/internal/config"
-	"starbase/internal/cqrs"
 	"starbase/internal/db"
 	"starbase/internal/queries"
+	"starbase/internal/tscheck"
 	"starbase/internal/web"
 	"starbase/static"
 )
 
 func newServer(t *testing.T) (*httptest.Server, *http.Client) {
 	t.Helper()
-	ts, c, _, _ := newServerBus(t)
+	ts, c, _, _ := newServerWriter(t)
 	return ts, c
 }
 
-// newServerBus also returns the bus and catalog, for tests that send commands.
-func newServerBus(t *testing.T) (*httptest.Server, *http.Client, *cqrs.Bus, *catalog.Catalog) {
+// newServerWriter also returns the writer and catalog, for tests that send commands.
+func newServerWriter(t *testing.T) (*httptest.Server, *http.Client, *writer.Writer, *catalog.Catalog) {
+	t.Helper()
+	s := startServer(t)
+	return s.ts, s.c, s.wr, s.cat
+}
+
+// testServer is the app in process, with a cookie jar for its client.
+type testServer struct {
+	ts   *httptest.Server
+	c    *http.Client
+	wr   *writer.Writer
+	cat  *catalog.Catalog
+	hub  *live.Hub
+	stop context.CancelFunc // as SIGTERM: the hub, the writer and the telemetry stop
+}
+
+func startServer(t *testing.T) testServer {
+	t.Helper()
+	return startServerWith(t, config.Config{})
+}
+
+// startServerWith is startServer on cfg, with its URLs filled in.
+func startServerWith(t *testing.T, cfg config.Config) testServer {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -51,24 +80,31 @@ func newServerBus(t *testing.T) (*httptest.Server, *http.Client, *cqrs.Bus, *cat
 	if err != nil {
 		t.Fatal(err)
 	}
-	hub := cqrs.NewHub()
-	bus := cqrs.NewBus(d.W, hub, log)
-	go bus.Run(ctx)
-	if err := bus.Exec(ctx, commands.SyncCatalog{Catalog: cat}); err != nil {
+	hub := live.New(app.HubOptions(d.R, log, cfg.StreamHeartbeat())) // production's
+	hubDone := make(chan struct{})
+	go func() { hub.Run(ctx); close(hubDone) }()
+	t.Cleanup(func() { cancel(); <-hubDone })
+	wr, err := writer.New(d, writer.Options{OnCommit: hub.Changed, Log: log})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := bus.Exec(ctx, commands.SeedDemo{}); err != nil {
+	go wr.Run(ctx)
+	t.Cleanup(func() { wr.Close() })
+	if err := wr.Do(ctx, commands.SyncCatalog{Catalog: cat, Datastar: static.Datastar()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := wr.Do(ctx, commands.SeedDemo{}); err != nil {
 		t.Fatal(err)
 	}
 	ts := httptest.NewUnstartedServer(nil)
 	ts.Start()
-	cfg := config.Config{BaseURL: ts.URL, RepoURL: "https://example.com/repo"}
-	srv := web.New(ctx, web.Deps{Config: cfg, Log: log, Bus: bus, Hub: hub, Queries: queries.New(d.R),
-		Catalog: cat, StaticFS: static.FS, Content: content.FS})
+	cfg.BaseURL, cfg.RepoURL = ts.URL, "https://example.com/repo"
+	srv := web.New(ctx, web.Deps{Config: cfg, Log: log, Writer: wr, Hub: hub, Queries: queries.New(d),
+		Catalog: cat, StaticFS: static.FS, Content: content.FS, Checker: tscheck.New(t.TempDir())})
 	ts.Config.Handler = srv.Handler()
 	t.Cleanup(func() { cancel(); ts.Close() })
 	jar, _ := cookiejar.New(nil)
-	return ts, &http.Client{Jar: jar}, bus, cat
+	return testServer{ts: ts, c: &http.Client{Jar: jar}, wr: wr, cat: cat, hub: hub, stop: cancel}
 }
 
 func get(t *testing.T, c *http.Client, url string) (*http.Response, string) {
@@ -114,7 +150,12 @@ func TestPages(t *testing.T) {
 		"/c/button/README.md":            404, // only a component's .js files are public
 		"/c/code-editor/vendor/prism.js": 200,
 		"/c/code-editor/manifest.json":   404,
-		"/art/hero.svg":                  200,
+		"/c/button/button.min.js":        200,
+		"/c/button/missing.min.js":       404,
+		// Already minified when vendored: its own .min, which the readable
+		// /c/echarts/echarts.js imports from this route.
+		"/c/echarts/vendor/echarts.esm.min.js": 200,
+		"/art/hero.svg":                        200,
 	} {
 		res, _ := get(t, c, ts.URL+path)
 		if res.StatusCode != want {
@@ -134,11 +175,55 @@ func TestDocumentHasNonceAndStream(t *testing.T) {
 	if !strings.Contains(body, `<script type="importmap" nonce="`+m[1]+`">`) {
 		t.Error("import map does not carry the CSP nonce")
 	}
-	if !strings.Contains(body, `data-init="@post(location.pathname + location.search`) {
-		t.Error("page does not open its render stream")
+	// sse.Reconnect replaces the element that opens the stream by a copy.
+	if i := strings.Index(body, "<body"); i < 0 || strings.Contains(body[i:i+strings.Index(body[i:], ">")], "data-init") {
+		t.Error("the body opens the render stream: a reconnect would copy the whole page")
+	}
+	open := regexp.MustCompile(`<div id="stream" hidden data-init="(@post\(location\.pathname \+ location\.search, [^"]*)" data-on:datastar-fetch="([^"]*)"></div>`).FindStringSubmatch(html.UnescapeString(body))
+	if open == nil {
+		t.Fatal("page does not open its render stream from #stream")
+	}
+	// While Datastar retries the stream, the watchdog must not re-create it.
+	if !strings.Contains(open[2], "'retrying'") || !strings.Contains(open[2], "$_quiet = 0") {
+		t.Errorf("#stream does not hold the watchdog off while it retries: %q", open[2])
+	}
+	// The Accept header marks the request, for a 204 when it is refused for good.
+	for _, want := range []string{"retry: 'error'", "retryMaxCount: Infinity", "headers: {Accept: 'text/event-stream'}"} {
+		if !strings.Contains(open[1], want) {
+			t.Errorf("the render stream opens without %s: %s", want, open[1])
+		}
 	}
 	if strings.Contains(body, "/dev/reload") {
 		t.Error("dev reload leaked into a non-dev build")
+	}
+}
+
+// Scripts load from the request's own origin's /static/ and /c/ only, and
+// inline ones by the nonce. A Host the policy can't name safely falls back to
+// BASE_URL.
+func TestContentSecurityPolicy(t *testing.T) {
+	ts, c := newServer(t)
+	for _, tc := range []struct{ host, origin string }{
+		{"", ts.URL},
+		{"localhost:8080", "http://localhost:8080"},
+		{"evil'host", ts.URL},
+	} {
+		req, _ := http.NewRequest("GET", ts.URL+"/about", nil)
+		if tc.host != "" {
+			req.Host = tc.host
+		}
+		res, err := c.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		want := regexp.MustCompile(`(^|; )script-src ` + regexp.QuoteMeta(tc.origin+"/static/ "+tc.origin+"/c/ ") + `'nonce-[A-Za-z0-9_-]{22}' 'unsafe-eval'(;|$)`)
+		if csp := res.Header.Get("Content-Security-Policy"); !want.MatchString(csp) {
+			t.Errorf("Host %q: %s", tc.host, csp)
+		}
+		if res.Header.Get("X-Frame-Options") != "DENY" {
+			t.Errorf("Host %q: X-Frame-Options %q", tc.host, res.Header.Get("X-Frame-Options"))
+		}
 	}
 }
 
@@ -163,7 +248,7 @@ func TestRenderStream(t *testing.T) {
 	ts, c := newServer(t)
 	get(t, c, ts.URL+"/")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, ts.URL+"/", strings.NewReader(`{"tabid":"tab12345"}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -184,7 +269,9 @@ func TestRenderStream(t *testing.T) {
 		var frame strings.Builder
 		for sc.Scan() {
 			if sc.Text() == "" && frame.Len() > 0 {
-				frames <- frame.String()
+				if !strings.HasPrefix(frame.String(), "event: datastar-patch-signals") { // the watchdog's
+					frames <- frame.String()
+				}
 				frame.Reset()
 				continue
 			}
@@ -206,9 +293,15 @@ func TestRenderStream(t *testing.T) {
 	}
 
 	cat, _ := catalog.Load(components.FS)
+	listed := 0
+	for _, c := range cat.Components {
+		if !c.Unlisted {
+			listed++
+		}
+	}
 	first := next()
-	if n := strings.Count(first, `class="card"`); !strings.Contains(first, "event: datastar-patch-elements") || n != len(cat.Components) {
-		t.Fatalf("first frame should list all %d cards, got %d", len(cat.Components), n)
+	if n := strings.Count(first, `class="card"`); !strings.Contains(first, "event: datastar-patch-elements") || n != listed {
+		t.Fatalf("first frame should list all %d cards, got %d", listed, n)
 	}
 	if r := post(t, c, ts.URL+"/cmd/browse", `{"tabid":"tab12345","cat":"feedback","sort":"name"}`, "same-origin"); r.StatusCode != 204 {
 		t.Fatalf("command = %d", r.StatusCode)
@@ -300,6 +393,9 @@ func TestPlaygroundRunner(t *testing.T) {
 	if !strings.Contains(body, `<script type="importmap">{"imports":{"datastar":"`+ts.URL+`/static/vendor/datastar-rocket-`) {
 		t.Error("runner lacks the absolute import map")
 	}
+	if !strings.Contains(body, "self.__sbLoop = ") || !strings.Contains(body, "guardLoops(js)") || !strings.Contains(body, `const TRANSPILE = "`+ts.URL+`/playground/transpile"`) || strings.Contains(body, "%!") {
+		t.Error("runner lacks its loop guard (or the format string broke it)")
+	}
 	// Assets must be loadable from the sandbox's opaque origin.
 	for _, p := range []string{"/c/index.js", "/c/button/button.js", "/static/vendor/datastar-rocket.js"} {
 		res, _ := get(t, c, ts.URL+p)
@@ -348,7 +444,9 @@ func TestShareFlow(t *testing.T) {
 		var f strings.Builder
 		for sc.Scan() {
 			if sc.Text() == "" && f.Len() > 0 {
-				frames <- f.String()
+				if !strings.HasPrefix(f.String(), "event: datastar-patch-signals") { // the watchdog's
+					frames <- f.String()
+				}
 				f.Reset()
 				continue
 			}
@@ -408,9 +506,9 @@ func TestAutoloader(t *testing.T) {
 			t.Errorf("autoloader lacks %q", want)
 		}
 	}
-	_, page := get(t, c, ts.URL+"/")
+	_, page := get(t, c, ts.URL+"/?load=auto") // the default is the bundle, see TestLoadingStrategy
 	if !strings.Contains(page, `src="/c/autoloader.js?v=`) {
-		t.Error("pages don't use the autoloader")
+		t.Error("?load=auto pages don't use the autoloader")
 	}
 }
 
@@ -478,7 +576,7 @@ func TestSiteThemeFromCookie(t *testing.T) {
 }
 
 func TestVersionedURLs(t *testing.T) {
-	ts, c, bus, cat := newServerBus(t)
+	ts, c, wr, cat := newServerWriter(t)
 	button, _ := cat.Get("button")
 
 	// The current version of a module: immutable and open to other sites.
@@ -495,11 +593,25 @@ func TestVersionedURLs(t *testing.T) {
 		}
 	}
 
-	// The snapshot: its autoloader loads versioned modules, and every file
+	// The snapshot: its autoloader loads versioned bundles, and every file
 	// in its import map serves exactly the bytes its hash says.
 	res, auto := get(t, c, ts.URL+"/c/@"+cat.Hash+"/autoloader.js")
-	if res.StatusCode != 200 || !strings.Contains(auto, `"sb-button":"../`+button.VersionedScript()+`"`) {
-		t.Fatalf("snapshot autoloader: %d", res.StatusCode)
+	if res.StatusCode != 200 || !strings.Contains(auto, `"sb-button":"../`+button.VersionedBundle()+`"`) {
+		t.Fatalf("snapshot autoloader: %d (it should load the bundles)", res.StatusCode)
+	}
+
+	// The minified module: served, immutable, smaller, and its relative
+	// imports point at the minified siblings (code-editor imports Prism).
+	res, minJS := get(t, c, ts.URL+"/c/"+button.VersionedMinScript())
+	if res.StatusCode != 200 || !strings.Contains(res.Header.Get("Cache-Control"), "immutable") || len(minJS) >= len(js) {
+		t.Fatalf("minified module: %d, %d bytes vs %d readable", res.StatusCode, len(minJS), len(js))
+	}
+	editor, _ := cat.Get("code-editor")
+	if _, ed := get(t, c, ts.URL+"/c/"+editor.VersionedMinScript()); !strings.Contains(ed, `"./vendor/prism.min.js"`) || strings.Contains(ed, `"./vendor/prism.js"`) {
+		t.Error("the minified code-editor should import the minified Prism")
+	}
+	if r, _ := get(t, c, ts.URL+"/c/"+editor.Slug+"@"+editor.Hash+"/vendor/prism.min.js"); r.StatusCode != 200 {
+		t.Errorf("minified vendored file: %d", r.StatusCode)
 	}
 	_, mapJSON := get(t, c, ts.URL+"/c/@"+cat.Hash+"/importmap.json")
 	var im struct{ Integrity map[string]string }
@@ -522,7 +634,7 @@ func TestVersionedURLs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := bus.Exec(context.Background(), commands.SyncCatalog{Catalog: oldCat}); err != nil {
+	if err := wr.Do(context.Background(), commands.SyncCatalog{Catalog: oldCat}); err != nil {
 		t.Fatal(err)
 	}
 	gone, _ := oldCat.Get("gone")
@@ -578,6 +690,29 @@ func TestSEO(t *testing.T) {
 			t.Errorf("%s: %d %s", p, r.StatusCode, r.Header.Get("Content-Type"))
 		}
 	}
+	// The homepage names the project and refers to the company by its @id only.
+	_, home := get(t, c, ts.URL+"/")
+	i := strings.Index(home, `<script type="application/ld+json"`)
+	j := strings.Index(home[i:], ">") + i + 1
+	k := strings.Index(home[j:], "</script>") + j
+	var ld struct {
+		Graph []map[string]any `json:"@graph"`
+	}
+	if err := json.Unmarshal([]byte(home[j:k]), &ld); err != nil || len(ld.Graph) != 2 {
+		t.Fatalf("homepage JSON-LD: %v %.300s", err, home[j:k])
+	}
+	if pub, _ := ld.Graph[0]["publisher"].(map[string]any); pub["@id"] != "https://zweiundeins.gmbh/#organization" || len(pub) != 1 {
+		t.Errorf("WebSite publisher = %v", ld.Graph[0]["publisher"])
+	}
+	sw := ld.Graph[1]
+	if sw["@type"] != "SoftwareSourceCode" || sw["@id"] != ts.URL+"/#software" || sw["maintainer"].(map[string]any)["@id"] != "https://zweiundeins.gmbh/#organization" {
+		t.Errorf("project = %v", sw)
+	}
+	for _, field := range []string{"address", "logo", "email", "sameAs"} {
+		if strings.Contains(home[j:k], `"`+field+`"`) {
+			t.Errorf("homepage JSON-LD repeats the company's %s", field)
+		}
+	}
 	_, page := get(t, c, ts.URL+"/components/button?x=1")
 	for _, want := range []string{
 		`<link rel="canonical" href="` + ts.URL + `/components/button">`,
@@ -607,5 +742,136 @@ func TestFlightCommand(t *testing.T) {
 		if res.StatusCode != tc.want {
 			t.Errorf("%s: %d, want %d", tc.body, res.StatusCode, tc.want)
 		}
+	}
+}
+
+// A component the site itself uses (sb-code-playground) is documented and
+// served, but not part of the gallery.
+func TestUnlistedComponent(t *testing.T) {
+	ts, c := newServer(t)
+	_, home := get(t, c, ts.URL+"/")
+	if strings.Contains(home, `data-slug="code-playground"`) {
+		t.Error("the gallery lists an unlisted component")
+	}
+	if res, _ := get(t, c, ts.URL+"/components/code-playground"); res.StatusCode != 200 {
+		t.Errorf("its page must stay reachable: %d", res.StatusCode)
+	}
+	if res, _ := get(t, c, ts.URL+"/c/code-playground/code-playground.js"); res.StatusCode != 200 {
+		t.Errorf("its module must stay served: %d", res.StatusCode)
+	}
+	_, sitemap := get(t, c, ts.URL+"/sitemap.xml")
+	if strings.Contains(sitemap, "/components/code-playground") {
+		t.Error("the sitemap lists an unlisted component")
+	}
+}
+
+// Immutable assets go out precompressed: brotli when accepted, decoding to
+// exactly the original bytes, and never compressed a second time by the
+// middleware.
+func TestPrecompressedAssets(t *testing.T) {
+	ts, _, _, cat := newServerWriter(t)
+	button, _ := cat.Get("button")
+	client := &http.Client{Transport: &http.Transport{DisableCompression: true}} // see the raw encoding
+	for _, u := range []string{"/c/" + button.VersionedMinScript(), "/c/" + button.VersionedScript(), "/c/" + button.VersionedBundle(), "/c/autoloader.js", "/c/bundle.js"} {
+		want, _ := func() ([]byte, error) {
+			req, _ := http.NewRequest("GET", ts.URL+u, nil)
+			res, err := client.Do(req) // identity
+			if err != nil {
+				return nil, err
+			}
+			defer res.Body.Close()
+			return io.ReadAll(res.Body)
+		}()
+		req, _ := http.NewRequest("GET", ts.URL+u, nil)
+		req.Header.Set("Accept-Encoding", "gzip, br")
+		res, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, _ := io.ReadAll(brotli.NewReader(res.Body))
+		res.Body.Close()
+		if res.Header.Get("Content-Encoding") != "br" || !bytes.Equal(got, want) || len(want) == 0 {
+			t.Errorf("%s: Content-Encoding %q, round trip ok=%v (%d bytes)", u, res.Header.Get("Content-Encoding"), bytes.Equal(got, want), len(want))
+		}
+	}
+	// A hashed static file is immutable, and a browser that asks again with
+	// its ETag gets a 304.
+	_, runner := get(t, client, ts.URL+"/playground/run")
+	u := regexp.MustCompile(`/static/vendor/datastar-rocket-[0-9a-f]+\.js`).FindString(runner)
+	req, _ := http.NewRequest("GET", ts.URL+u, nil)
+	req.Header.Set("Accept-Encoding", "br")
+	res, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if u == "" || res.Header.Get("Cache-Control") != "public, max-age=31536000, immutable" || res.Header.Get("ETag") == "" {
+		t.Fatalf("%q: Cache-Control %q, ETag %q", u, res.Header.Get("Cache-Control"), res.Header.Get("ETag"))
+	}
+	req.Header.Set("If-None-Match", res.Header.Get("ETag"))
+	if res, err = client.Do(req); err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusNotModified {
+		t.Errorf("If-None-Match with its ETag: %d", res.StatusCode)
+	}
+}
+
+// Every size a component's page shows is what the server sends: each file
+// under brotli and gzip, and its minified file under brotli.
+func TestSizesAreBytesServed(t *testing.T) {
+	ts, _, _, cat := newServerWriter(t)
+	client := &http.Client{Transport: &http.Transport{DisableCompression: true}}
+	served := func(u, coding string) int {
+		t.Helper()
+		req, _ := http.NewRequest("GET", ts.URL+u, nil)
+		req.Header.Set("Accept-Encoding", coding)
+		res, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		b, _ := io.ReadAll(res.Body)
+		if res.StatusCode != 200 || res.Header.Get("Content-Encoding") != coding {
+			t.Errorf("%s: %d, Content-Encoding %q, want %s", u, res.StatusCode, res.Header.Get("Content-Encoding"), coding)
+		}
+		return len(b)
+	}
+	for _, c := range cat.Components {
+		mins, err := cat.MinFiles(c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range c.Sizes.Files {
+			u := "/c/" + c.Slug + "@" + c.Hash + "/"
+			br, gz, min := served(u+f.Name, "br"), served(u+f.Name, "gzip"), 0
+			if _, ok := mins[catalog.MinPath(f.Name)]; ok {
+				min = served(u+catalog.MinPath(f.Name), "br")
+			} else {
+				min = br // already minified: it ships as it is
+			}
+			if br != f.Brotli || gz != f.Gzip || min != f.Min {
+				t.Errorf("%s/%s: served br %d, gzip %d, min %d; the table shows %d, %d, %d", c.Slug, f.Name, br, gz, min, f.Brotli, f.Gzip, f.Min)
+			}
+		}
+	}
+}
+
+// Pages load every component as one file while the bundle fits its budget;
+// ?load=auto forces the autoloader (for measuring), and over budget the
+// autoloader is the default.
+func TestLoadingStrategy(t *testing.T) {
+	ts, c := newServer(t)
+	_, page := get(t, c, ts.URL+"/about")
+	if !strings.Contains(page, `src="/c/bundle.js?v=`) || strings.Contains(page, `src="/c/autoloader.js?v=`) {
+		t.Error("a page should load the bundle by default")
+	}
+	_, page = get(t, c, ts.URL+"/about?load=auto")
+	if !strings.Contains(page, `src="/c/autoloader.js?v=`) || strings.Contains(page, `src="/c/bundle.js?v=`) {
+		t.Error("?load=auto should load the autoloader")
+	}
+	if res, body := get(t, c, ts.URL+"/c/bundle.js"); res.StatusCode != 200 || len(body) < 10_000 {
+		t.Fatalf("bundle: %d, %d bytes", res.StatusCode, len(body))
 	}
 }

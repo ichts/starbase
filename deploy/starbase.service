@@ -28,8 +28,9 @@ IPAddressAllow=127.0.0.53 127.0.0.54
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 
 # Public and unauthenticated (pixel board, playground): keep it well away
-# from the other services' memory.
-MemoryHigh=256M
+# from the other services' memory. internal/app plans for up to 80% of
+# MemoryMax (streamBudget, MemoryLimit); MemoryHigh throttles only past that.
+MemoryHigh=320M
 MemoryMax=384M
 TasksMax=256
 

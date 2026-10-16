@@ -25,15 +25,16 @@ const styles = /* css */ `
 :host {
 	--_track: var(--sb-border-strong, #3A4868);
 	--_on: var(--sb-brand, #8C6BFF);
-	--_knob: var(--sb-text-1, #F3F4FA);
-	--_text: var(--sb-text-1, #F3F4FA);
+	--_knob: var(--sb-toggle-knob, var(--sb-text-1, #F3F4FA));
+	--_knob-on: var(--sb-toggle-knob, var(--sb-text-on-brand, #F3F4FA));
 	--_focus: var(--sb-brand-light, #B09AFF);
 	--_notch: var(--sb-notch, 1);
 	display: inline-flex;
 	vertical-align: middle;
 }
-:host([disabled]) { opacity: 0.5; pointer-events: none; }
-label { display: inline-flex; align-items: center; gap: 0.75em; color: var(--_text); cursor: pointer; }
+:host([hidden]) { display: none; }
+label { display: inline-flex; align-items: center; gap: 0.75em; cursor: pointer; }
+label:has(:disabled) { opacity: 0.5; pointer-events: none; }
 button {
 	all: unset;
 	position: relative;
@@ -42,8 +43,8 @@ button {
 	background: var(--_track);
 	clip-path: ${notch('calc(var(--_u) * var(--_notch))')};
 	border-radius: calc(var(--_u) * 3 * (1 - var(--_notch)));
-	cursor: pointer;
-	transition: background 180ms steps(3, end);
+	/* cursor: the label's (all: unset inherits it) */
+	transition: background 180ms steps(calc(3 + 997 * (1 - var(--_notch)))); /* stepped at notch 1, smooth at 0 */
 }
 .sm { --_u: 3px; }
 .md { --_u: 4px; }
@@ -56,12 +57,18 @@ button {
 	background: var(--_knob);
 	clip-path: ${notch('calc(var(--_u) / 2 * var(--_notch))')};
 	border-radius: calc(var(--_u) * 2 * (1 - var(--_notch)));
-	transition: translate 180ms steps(5, end);
+	transition: inset-inline-start 180ms steps(calc(5 + 995 * (1 - var(--_notch))));
 }
 button.on { background: var(--_on); }
-button.on .knob { translate: calc(var(--_u) * 5) 0; }
+button.on .knob { inset-inline-start: calc(var(--_u) * 6); background: var(--_knob-on); }
 button:focus-visible { outline: 2px solid var(--_focus); outline-offset: 3px; clip-path: none; }
 @media (prefers-reduced-motion: reduce) { .knob, button { transition: none; } }
+@media (forced-colors: active) {
+	button { outline: 1px solid; outline-offset: -1px; }
+	button.on { background: Highlight; }
+	.knob { forced-color-adjust: none; background: CanvasText; }
+	button.on .knob { background: HighlightText; }
+}
 `
 
 rocket('sb-toggle', {
@@ -79,31 +86,68 @@ rocket('sb-toggle', {
 			{ name: 'sb-change', kind: 'custom-event', bubbles: true, composed: true, description: 'Same moment. detail: { name, value, checked } (value is the checked state): ready for a command.' },
 		],
 	},
-	setup: ({ $$, action, adoptStyles, defineHostProp, effect, emit, host, observeProps, overrideProp, props }) => {
+	setup: ({ $$, action, adoptStyles, cleanup, defineHostProp, effect, emit, host, observeProps, overrideProp, props }) => {
 		adoptStyles(host, styles)
+		// Kept across moves (Rocket drops $$ on disconnect, setup runs again on
+		// re-attach) on the element's own ElementInternals: { on: the live
+		// state, served: the server's last word }.
+		const keep = internalsOf(host)
 		// Interaction state lives in a local signal, never reflected.
-		$$.on = props.checked
-		// A checked attribute sent by the server wins when it changes (a morph
-		// with a new value); re-sending the same markup changes nothing, so edits
-		// survive re-renders. A *removed* attribute changes nothing either: morphs
-		// also remove attributes that were only reflected (e.g. from a data-bind
-		// write before the upgrade). To clear it, the server sends checked="false".
-		observeProps(() => peek(() => host.hasAttribute('checked') && ($$.on = props.checked)), 'checked')
+		$$.on = keep.on ?? props.checked
+		// A checked attribute sent by the server wins when it says something new
+		// (a morph with a new value); re-sending the same markup changes nothing,
+		// so edits survive re-renders. A *removed* attribute is ignored (morphs
+		// also remove attributes that were only reflected, e.g. from a data-bind
+		// write before the upgrade), but it clears the server's last word, so
+		// sending the attribute again counts. To switch it off, the server sends
+		// checked="false". Not observeProps: it only fires when the decoded value
+		// changes, and checked="false" onto an element without the attribute
+		// decodes to the same false. The same observer hands the host's
+		// aria-label to the switch (a host label doesn't reach inside).
+		const attrs = () =>
+			peek(() => {
+				$$.aria = host.getAttribute('aria-label') || 'Toggle'
+				if (!host.hasAttribute('checked')) return void (keep.served = null)
+				if (props.checked !== keep.served) $$.on = keep.served = props.checked
+			})
+		attrs() // also catches what the server said while the element was detached
+		const watch = new MutationObserver(attrs)
+		watch.observe(host, { attributeFilter: ['checked', 'aria-label'] })
+		cleanup(() => watch.disconnect())
 		overrideProp('checked', () => peek(() => $$.on), (v) => peek(() => ($$.on = !!v)))
 		// Commands: the attribute is the server's value, $$.on the local one.
 		// With confirm, :state(pending) marks an edit the server hasn't confirmed
 		// yet; revert() returns to the server's value (e.g. a rejected command).
-		const states = internalsOf(host).states
+		const states = keep.states
 		const sync = () => peek(() => (props.confirm && $$.on !== props.checked ? states.add('pending') : states.delete('pending')))
-		effect(() => ($$.on, sync()))
+		// Rocket's disconnect wipes $$ (re-running this) before a move re-attaches.
+		effect(() => ((keep.on = $$.on ?? keep.on), sync()))
 		observeProps(sync)
-		defineHostProp('revert', { value: () => peek(() => (($$.on = props.checked), sync())) })
+		const revert = () => peek(() => (($$.on = props.checked), sync()))
+		defineHostProp('revert', { value: revert })
 		action('toggle', () => {
 			if (props.disabled) return
 			$$.on = !$$.on
 			emit('change')
 			emit('sb-change', { name: props.name, value: $$.on, checked: $$.on })
 		})
+		// Forms: until Rocket can make this element form-associated, join the
+		// submissions and resets of the form it sits in. `formdata` also fires for
+		// new FormData(form), so Datastar's contentType: 'form' posts include it.
+		// Both are heard on the root (document or shadow root), once every
+		// listener on the form has run: a reset the page cancelled (whenever its
+		// listener was added) leaves the value, as it leaves native fields, and a
+		// form nested in this one by a script, whose events bubble through it,
+		// isn't taken for it. setup reruns on a re-attach, so a move follows.
+		// Like a checkbox without a value: name=on when on, nothing when off. A
+		// reset is revert(): the server's value, no change events.
+		const form = host.closest('form')
+		const root = host.getRootNode()
+		const onData = (evt) => evt.target === form && peek(() => props.name && !props.disabled && $$.on && evt.formData.append(props.name, 'on'))
+		const onReset = (evt) => evt.target === form && !evt.defaultPrevented && revert()
+		root.addEventListener('formdata', onData)
+		root.addEventListener('reset', onReset)
+		cleanup(() => (root.removeEventListener('formdata', onData), root.removeEventListener('reset', onReset)))
 	},
 	render: ({ html, props: { label, size, disabled } }) => html`
 		<label>
@@ -112,7 +156,7 @@ rocket('sb-toggle', {
 				role="switch"
 				part="switch"
 				class="${size}"
-				aria-label="${label ? null : 'Toggle'}"
+				data-attr:aria-label="${label ? null : '$$aria'}"
 				disabled="${disabled}"
 				data-class:on="$$on"
 				data-attr:aria-checked="String($$on)"

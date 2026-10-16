@@ -1,0 +1,291 @@
+{
+  "tag": "sb-data-table",
+  "props": [
+    {
+      "name": "columns",
+      "attribute": "columns",
+      "type": "json",
+      "default": [],
+      "required": false,
+      "docs": {
+        "description": "The columns: [{key, label?, width?, align?, sortable?, resizable?, min?, fit?}]. With resizable: resizable: false keeps a column's width, min is its narrowest (px, default 40), fit its width for the whole result (px). width is a CSS grid track (a number is px; default minmax(6rem, 1fr)); ch and em resolve in each row's own font, so style header text through ::part(column), never ::part(header); align is start, center or end. A row's value for a key is a scalar or a cell object {value, text?, suffix?, href?, tone?}."
+      }
+    },
+    {
+      "name": "rows",
+      "attribute": "rows",
+      "type": "json",
+      "default": [],
+      "required": false,
+      "docs": {
+        "description": "The rows at hand, objects keyed by column: all of them, or the window the server sent, starting at row offset. A value is a scalar, or a cell object {value, text, suffix, href, tone}: text replaces the formatted value, suffix follows it muted, href (http, https or mailto) makes it a link, tone (info, success, warning, danger, neutral) a badge. value is the sort key. Nothing is rendered as HTML."
+      }
+    },
+    {
+      "name": "offset",
+      "attribute": "offset",
+      "type": "number",
+      "default": 0,
+      "required": false,
+      "docs": {
+        "description": "Index of the first row in rows."
+      }
+    },
+    {
+      "name": "total",
+      "attribute": "total",
+      "type": "number",
+      "default": 0,
+      "required": false,
+      "docs": {
+        "description": "How many rows there are (at least offset plus the rows given)."
+      }
+    },
+    {
+      "name": "rowKey",
+      "attribute": "row-key",
+      "type": "string",
+      "default": "id",
+      "required": false,
+      "docs": {
+        "description": "The field that identifies a row, for the selection and sb-row-activate."
+      }
+    },
+    {
+      "name": "rowHeight",
+      "attribute": "row-height",
+      "type": "number",
+      "default": 36,
+      "required": false,
+      "docs": {
+        "description": "The height of every row, in px: fixed, so the scroll position tells which rows are in view."
+      }
+    },
+    {
+      "name": "buffer",
+      "attribute": "buffer",
+      "type": "number",
+      "default": 4000,
+      "required": false,
+      "docs": {
+        "description": "How much to keep ready above and below the view, in px of rows."
+      }
+    },
+    {
+      "name": "sort",
+      "attribute": "sort",
+      "type": "json",
+      "default": {},
+      "required": false,
+      "docs": {
+        "description": "The order the rows are in: {key, dir: \"asc\" | \"desc\"}. The server sends it with the rows. When the table holds every row (offset 0, no more than total), a header click sorts them here too; otherwise it asks for the order (sb-sort). A new sort from the server wins."
+      }
+    },
+    {
+      "name": "loading",
+      "attribute": "loading",
+      "type": "boolean",
+      "default": false,
+      "required": false,
+      "docs": {
+        "description": "Rows are on their way (bind it to data-indicator): the table is aria-busy."
+      }
+    },
+    {
+      "name": "selection",
+      "attribute": "selection",
+      "type": "oneOf",
+      "default": "none",
+      "required": false,
+      "values": [
+        "none",
+        "single",
+        "multiple"
+      ],
+      "docs": {
+        "description": "How many rows can be selected."
+      }
+    },
+    {
+      "name": "selected",
+      "attribute": "selected",
+      "type": "json",
+      "default": [],
+      "required": false,
+      "docs": {
+        "description": "The selection: a JSON array of row keys. A new list from the server replaces it; the live value is the selected property."
+      }
+    },
+    {
+      "name": "label",
+      "attribute": "label",
+      "type": "string",
+      "default": "Table",
+      "required": false,
+      "docs": {
+        "description": "Accessible name."
+      }
+    },
+    {
+      "name": "confirm",
+      "attribute": "confirm",
+      "type": "boolean",
+      "default": false,
+      "required": false,
+      "docs": {
+        "description": "Server-confirmed selection: :state(pending) while the local selection differs from the server's selected attribute (see revert())."
+      }
+    },
+    {
+      "name": "name",
+      "attribute": "name",
+      "type": "string",
+      "default": "",
+      "required": false,
+      "docs": {
+        "description": "Name reported in sb-change, sb-columns and sb-export (e.g. the field of a command)."
+      }
+    },
+    {
+      "name": "hiddenColumns",
+      "attribute": "hidden-columns",
+      "type": "json",
+      "default": [],
+      "required": false,
+      "docs": {
+        "description": "View state: the keys of the columns not shown, as a JSON array. A changed list from the server wins; the same list again keeps the user's choice. The live list is the hiddenColumns property. At least one column always shows."
+      }
+    },
+    {
+      "name": "columnPicker",
+      "attribute": "column-picker",
+      "type": "boolean",
+      "default": false,
+      "required": false,
+      "docs": {
+        "description": "Show a Columns button in the toolbar, with a menu that shows and hides columns (sb-columns)."
+      }
+    },
+    {
+      "name": "columnsLabel",
+      "attribute": "columns-label",
+      "type": "string",
+      "default": "Columns",
+      "required": false,
+      "docs": {
+        "description": "The Columns button's text, and the accessible name of its menu."
+      }
+    },
+    {
+      "name": "resizable",
+      "attribute": "resizable",
+      "type": "boolean",
+      "default": false,
+      "required": false,
+      "docs": {
+        "description": "The user can resize columns: a grip at each header's end (drag, double-click to fit), or Alt+Arrow to its separator."
+      }
+    },
+    {
+      "name": "widths",
+      "attribute": "widths",
+      "type": "json",
+      "default": {},
+      "required": false,
+      "docs": {
+        "description": "View state: widths in px by column key, {\"name\": 180}, over the columns' width. A new object from the server wins, the same one keeps the user's; the live map is the widths property."
+      }
+    },
+    {
+      "name": "resizeHint",
+      "attribute": "resize-hint",
+      "type": "string",
+      "default": "Drag to resize, double-click to fit",
+      "required": false,
+      "docs": {
+        "description": "The resize grip's tooltip."
+      }
+    },
+    {
+      "name": "resetWidthsLabel",
+      "attribute": "reset-widths-label",
+      "type": "string",
+      "default": "Reset column widths",
+      "required": false,
+      "docs": {
+        "description": "The column picker's reset item."
+      }
+    }
+  ],
+  "slots": [
+    {
+      "name": "toolbar",
+      "description": "Your own controls (e.g. export buttons), in a toolbar above the table, before the Columns button."
+    }
+  ],
+  "events": [
+    {
+      "kind": "custom-event",
+      "name": "sb-window",
+      "bubbles": true,
+      "composed": true,
+      "description": "The view needs rows the table doesn't have (also on connect and on resize): detail { offset, count }, plus key and dir of the order to send them in. Answer with rows from that offset, offset and total."
+    },
+    {
+      "kind": "custom-event",
+      "name": "sb-sort",
+      "bubbles": true,
+      "composed": true,
+      "description": "A sortable header was clicked. detail: { key, dir }, plus the window to answer with (offset 0, count). Answer with those rows in that order, and the new sort; a table that holds every row has sorted them already."
+    },
+    {
+      "kind": "custom-event",
+      "name": "sb-row-activate",
+      "bubbles": true,
+      "composed": true,
+      "description": "Enter or a double click on a row (not on a link in it). detail: { key }."
+    },
+    {
+      "kind": "custom-event",
+      "name": "sb-cell-activate",
+      "bubbles": true,
+      "composed": true,
+      "description": "A click or middle click on a link in a cell, or Enter on its cell. detail: { key, column, value, href }. Cancelable: preventDefault() stops the navigation, for an in-page action instead."
+    },
+    {
+      "kind": "event",
+      "name": "change",
+      "bubbles": true,
+      "composed": true,
+      "description": "The selection changed."
+    },
+    {
+      "kind": "custom-event",
+      "name": "sb-change",
+      "bubbles": true,
+      "composed": true,
+      "description": "The selection changed. detail: { name, value } (an array of row keys): ready for a command."
+    },
+    {
+      "kind": "custom-event",
+      "name": "sb-export",
+      "bubbles": true,
+      "composed": true,
+      "description": "requestExport(format) was called. detail: { name, format, sort: { key, dir }, columns, selected }: the order on screen, the keys of the shown columns in order, and the local selection. The page asks the server for the file; the table never builds one."
+    },
+    {
+      "kind": "custom-event",
+      "name": "sb-columns",
+      "bubbles": true,
+      "composed": true,
+      "description": "The user showed or hid a column in the column picker. detail: { name, hidden } (the keys of every hidden column). View state: not emitted for a change the server made or a property write."
+    },
+    {
+      "kind": "custom-event",
+      "name": "sb-column-widths",
+      "bubbles": true,
+      "composed": true,
+      "description": "The user resized a column (at the end of a drag, never during it). detail: { name, widths }, the whole map. Not emitted for the server's changes or a property write."
+    }
+  ]
+}

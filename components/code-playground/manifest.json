@@ -83,7 +83,27 @@
       "default": {},
       "required": false,
       "docs": {
-        "description": "Initial files as JSON {\"component.js\": \"…\"}; handy for server-rendered pages. Child scripts are used when empty."
+        "description": "Initial files as JSON {\"component.js\": \"…\"}, merged over the child scripts (a file here wins); handy for server-rendered pages."
+      }
+    },
+    {
+      "name": "typescript",
+      "attribute": "typescript",
+      "type": "boolean",
+      "default": false,
+      "required": false,
+      "docs": {
+        "description": "Offer a TypeScript switch, which renames component.js to component.ts (the runner must accept it). Initial files with component.ts switch it on."
+      }
+    },
+    {
+      "name": "diagnostics",
+      "attribute": "diagnostics",
+      "type": "json",
+      "default": {},
+      "required": false,
+      "docs": {
+        "description": "Problems per file, as JSON {\"component.js\": [{line, col, length, message, text}]}, for that file's editor (see sb-code-editor's diagnostics)."
       }
     }
   ],
@@ -91,6 +111,10 @@
     {
       "name": "(files)",
       "description": "Child <script type=\"text/plain\" data-file=\"component.js|index.html|style.css\"> elements with the initial files."
+    },
+    {
+      "name": "bar",
+      "description": "Extra content for the top bar, between the file tabs and the run status (Starbase puts its live size line there)."
     }
   ],
   "events": [

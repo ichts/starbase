@@ -2,19 +2,20 @@ import { rocket } from 'datastar'
 
 const styles = /* css */ `
 :host {
+	--_shadow: var(--sb-shadow-overlay, 0 8px 24px -12px rgb(0 0 0 / 0.6));
 	--_bg: var(--sb-surface-raised, #10182B);
 	--_border: var(--sb-border-strong, #3A4868);
 	--_text: var(--sb-text-1, #F3F4FA);
-	--_gap: 10px;
 	/* Hug the trigger exactly: the tip is positioned against this box. */
 	position: relative;
 	display: inline-flex;
 	vertical-align: middle;
 }
+:host([hidden]) { display: none; }
 .anchor { display: inline-flex; }
 .tip {
 	position: absolute;
-	z-index: 70;
+	z-index: var(--sb-z-tooltip, 70);
 	inline-size: max-content;
 	max-inline-size: 16rem;
 	padding: 0.4rem 0.75rem;
@@ -25,30 +26,40 @@ const styles = /* css */ `
 	font-size: 0.8125rem;
 	font-weight: 600;
 	line-height: 1.4;
-	pointer-events: none;
+	/* Hidden also leaves the accessibility tree; the fade-out still plays. */
 	opacity: 0;
-	transition: opacity 120ms, translate 120ms;
-	box-shadow: 0 8px 24px -12px rgb(0 0 0 / 0.6);
+	visibility: hidden;
+	transition: opacity 120ms, translate 120ms, visibility 120ms;
+	box-shadow: var(--_shadow);
 }
+.tip:empty { display: none; }
+.tip::before, .tip::after { content: ""; position: absolute; }
+/* The pointer can move onto a shown tip: this bridges the 10px gap (and
+   the border) on the trigger's side (--_b), once the tip has slid into
+   place, so it never covers the trigger. */
+.tip::before { inset: var(--_b); visibility: hidden; }
+.show::before { visibility: visible; transition: 0s 120ms; }
 /* A pixel arrow. */
 .tip::after {
-	content: "";
-	position: absolute;
+	left: calc(50% - 4px);
+	top: calc(50% - 2px);
 	inline-size: 8px;
 	block-size: 4px;
 	background: var(--_border);
-	clip-path: polygon(0 0, 100% 0, 75% 50%, 50% 100%, 25% 50%);
+	clip-path: polygon(0 0, 100% 0, 50% 100%);
 }
-.top { inset-block-end: calc(100% + var(--_gap)); inset-inline-start: 50%; translate: -50% 4px; }
-.top::after { inset-block-start: 100%; inset-inline-start: calc(50% - 4px); }
-.bottom { inset-block-start: calc(100% + var(--_gap)); inset-inline-start: 50%; translate: -50% -4px; }
-.bottom::after { inset-block-end: 100%; inset-inline-start: calc(50% - 4px); rotate: 180deg; }
-.left { inset-inline-end: calc(100% + var(--_gap)); inset-block-start: 50%; translate: 4px -50%; }
-.left::after { inset-inline-start: 100%; inset-block-start: calc(50% - 2px); rotate: -90deg; translate: -2px 0; }
-.right { inset-inline-start: calc(100% + var(--_gap)); inset-block-start: 50%; translate: -4px -50%; }
-.right::after { inset-inline-end: 100%; inset-block-start: calc(50% - 2px); rotate: 90deg; translate: 2px 0; }
-.show.top, .show.bottom { opacity: 1; translate: -50% 0; }
-.show.left, .show.right { opacity: 1; translate: 0 -50%; }
+/* Physical sides, in RTL too. --_n is the slide-in. */
+.top, .bottom { left: 50%; translate: -50% var(--_n); }
+.left, .right { top: 50%; translate: var(--_n) -50%; }
+.top { bottom: calc(100% + 10px); --_n: 4px; --_b: 100% 0 -11px; }
+.bottom { top: calc(100% + 10px); --_n: -4px; --_b: -11px 0 100%; }
+.left { right: calc(100% + 10px); --_n: 4px; --_b: 0 -11px 0 100%; }
+.right { left: calc(100% + 10px); --_n: -4px; --_b: 0 100% 0 -11px; }
+.top::after { top: 100%; }
+.bottom::after { top: auto; bottom: 100%; rotate: 180deg; }
+.left::after { left: calc(100% - 2px); rotate: -90deg; }
+.right::after { left: auto; right: calc(100% - 2px); rotate: 90deg; }
+.show { opacity: 1; visibility: visible; --_n: 0px; }
 @media (prefers-reduced-motion: reduce) { .tip { transition: none; } }
 `
 
@@ -61,21 +72,26 @@ rocket('sb-tooltip', {
 	manifest: {
 		slots: [{ name: 'default', description: 'The trigger element.' }],
 	},
-	setup: ({ $$, adoptStyles, host, observeProps, props }) => {
+	setup: ({ $$, adoptStyles, cleanup, host }) => {
 		adoptStyles(host, styles)
-		$$.forced = props.open
-		$$.hover = false
-		observeProps(() => ($$.forced = props.open), 'open')
+		$$.hover = $$.focus = false
+		// Escape dismisses the tip wherever focus is.
+		const esc = (e) => e.key === 'Escape' && ($$.hover = $$.focus = false)
+		addEventListener('keydown', esc)
+		cleanup(() => removeEventListener('keydown', esc))
 	},
-	// Events from the slotted trigger bubble through the anchor.
-	render: ({ html, props: { content, placement } }) => html`
+	// The anchor holds the trigger and the tip, so the pointer can move onto the
+	// tip. Focus pins the tip, except a mouse click's (the pointer is on the
+	// trigger and it isn't :focus-visible); a tap's focus comes after its
+	// pointerleave, so it pins. The live region announces the tip: a shadow-DOM
+	// tip can't be the trigger's aria-describedby. `open` is interpolated: a
+	// prop change re-renders.
+	render: ({ html, props: { content, open, placement } }) => html`
 		<span class="anchor"
 			data-on:pointerenter="$$hover = true"
 			data-on:pointerleave="$$hover = false"
-			data-on:focusin="$$hover = true"
-			data-on:focusout="$$hover = false"
-			data-on:keydown="evt.key === 'Escape' && ($$hover = false)"
-		><slot></slot></span>
-		<span class="tip ${placement}" part="tip" role="tooltip" data-class:show="$$forced || $$hover">${content}</span>
+			data-on:focusin="$$focus = !$$hover || evt.composedPath()[0].matches(':focus-visible')"
+			data-on:focusout="$$focus = false"
+		><slot></slot><span aria-live="polite"><span class="tip ${placement}" part="tip" role="tooltip" data-class:show="${open} || $$hover || $$focus">${content}</span></span></span>
 	`,
 })

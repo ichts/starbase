@@ -794,6 +794,41 @@
 			box-shadow: var(--sb-glow-brand);
 			translate: 0 -2px;
 		}
+
+		&:hover .card__preview {
+			--_grid: color-mix(in oklch, var(--sb-brand) 30%, transparent);
+		}
+
+		/* Hover hint, so the preview's different job is discoverable. On the card,
+		   since the preview clips: it straddles the preview's top edge, clear of the demo. */
+		&::before {
+			--_h: 1rem;
+			--_n: calc(2px * var(--sb-notch));
+			content: "live demo" / ""; /* a hint for the eye: screen readers skip it */
+			position: absolute;
+			z-index: calc(var(--sb-z-raised) + 1);
+			inset-block-start: calc(var(--sb-space-3) - var(--_h) / 2);
+			inset-inline-end: calc(var(--sb-space-3) + var(--sb-space-4));
+			block-size: var(--_h);
+			padding-inline: 6px;
+			border: var(--sb-border-width) solid oklch(from var(--sb-brand) l c h / 0.6);
+			border-radius: calc(var(--sb-radius-sm) * (1 - var(--sb-notch)));
+			clip-path: polygon(var(--_n) 0, calc(100% - var(--_n)) 0, calc(100% - var(--_n)) var(--_n), 100% var(--_n), 100% calc(100% - var(--_n)), calc(100% - var(--_n)) calc(100% - var(--_n)), calc(100% - var(--_n)) 100%, var(--_n) 100%, var(--_n) calc(100% - var(--_n)), 0 calc(100% - var(--_n)), 0 var(--_n), var(--_n) var(--_n));
+			background: var(--sb-surface-card);
+			color: var(--sb-text-muted);
+			font-size: var(--sb-font-size-00);
+			line-height: calc(var(--_h) - 2 * var(--sb-border-width));
+			letter-spacing: var(--sb-letter-spacing-caps);
+			text-transform: uppercase;
+			white-space: nowrap;
+			opacity: 0;
+			pointer-events: none;
+			transition: opacity var(--sb-duration-base) var(--sb-ease-standard);
+		}
+
+		&:hover::before {
+			opacity: 1;
+		}
 	}
 
 	.card__preview {
@@ -805,9 +840,15 @@
 		min-block-size: 9rem;
 		padding: var(--sb-space-4);
 		border-radius: var(--sb-radius-md);
+		/* A pixel grid marks a live demo: this panel is the component itself,
+		   not a picture, and the only part of the card that isn't the link. */
+		--_grid: color-mix(in oklch, var(--sb-border) 60%, transparent);
 		background:
 			radial-gradient(circle at 50% 120%, oklch(from var(--sb-brand) l c h / 0.08), transparent 60%),
+			linear-gradient(var(--_grid) 1px, transparent 1px),
+			linear-gradient(90deg, var(--_grid) 1px, transparent 1px),
 			var(--sb-surface-inset);
+		background-size: auto, 16px 16px, 16px 16px, auto;
 		overflow: hidden;
 
 		& > * {
@@ -1144,9 +1185,13 @@
 		gap: var(--sb-space-4);
 		min-block-size: 8rem;
 		padding: var(--sb-space-8) var(--sb-space-6);
+		--_grid: color-mix(in oklch, var(--sb-border) 60%, transparent);
 		background:
 			radial-gradient(circle at 50% 140%, oklch(from var(--sb-brand) l c h / 0.1), transparent 60%),
+			linear-gradient(var(--_grid) 1px, transparent 1px),
+			linear-gradient(90deg, var(--_grid) 1px, transparent 1px),
 			var(--sb-surface-inset);
+		background-size: auto, 16px 16px, 16px 16px, auto;
 		color: var(--sb-text-1);
 		font-size: var(--sb-font-size-2);
 
@@ -1165,6 +1210,20 @@
 		border: var(--sb-border-width) solid var(--sb-border);
 		border-radius: var(--sb-radius-md);
 		overflow: hidden;
+	}
+
+	/* A listing's source file; the copy button sits at its end. */
+	.code-source {
+		display: flex;
+		align-items: center;
+		min-block-size: var(--sb-space-12);
+		padding: var(--sb-space-2) var(--sb-space-3);
+		padding-inline-end: var(--sb-space-12);
+		border-block-end: var(--sb-border-width) solid var(--sb-border);
+		background: var(--sb-surface-inset);
+		color: var(--sb-text-2);
+		font-size: var(--sb-font-size-0);
+		overflow-wrap: anywhere;
 	}
 
 	.code-copy {
@@ -1193,6 +1252,14 @@
 
 	.playground__stage {
 		min-block-size: 12rem;
+	}
+
+	.playground__style {
+		display: flex;
+		justify-content: flex-end;
+		padding: var(--sb-space-2) var(--sb-space-6);
+		border-block-start: var(--sb-border-width) solid var(--sb-border);
+		font-size: var(--sb-font-size-1);
 	}
 
 	.playground__controls {
@@ -1249,6 +1316,33 @@
 
 		& td:first-child code {
 			white-space: nowrap;
+		}
+	}
+
+	/* Installation: one panel per way of loading a component. */
+	.install-tabs {
+		margin-block: var(--sb-space-4);
+	}
+
+	.install-panel {
+		display: grid;
+		gap: var(--sb-space-3);
+
+		& > p {
+			margin: 0;
+		}
+	}
+
+	.install-files {
+		margin: 0;
+		font-size: var(--sb-font-size-2);
+
+		& ul {
+			margin-block: var(--sb-space-1) 0;
+		}
+
+		& .muted {
+			font-variant-numeric: tabular-nums;
 		}
 	}
 
@@ -1420,6 +1514,7 @@
 
 	.code-page__island {
 		padding-block-start: var(--sb-space-6);
+		container: playground / inline-size;
 
 		& sb-code-playground {
 			--sb-code-playground-height: max(28rem, calc(100dvh - 18rem));
@@ -1429,6 +1524,40 @@
 		& sb-code-playground:not(:defined) {
 			display: block;
 			block-size: var(--sb-code-playground-height);
+		}
+	}
+
+	/* The size line in the playground's top bar (slot="bar"). It gives up
+	   detail as the playground narrows: the minified and raw sizes first,
+	   then the total with dependencies. */
+	.pg-size {
+		color: var(--sb-text-muted);
+		font-size: 0.75rem;
+		white-space: nowrap;
+		font-variant-numeric: tabular-nums;
+		transition: opacity 0.2s;
+		padding-inline-end: 0.75rem;
+		border-inline-end: 1px solid var(--sb-border);
+
+		& strong {
+			color: var(--sb-text-2);
+			font-weight: 600;
+		}
+
+		&.is-stale {
+			opacity: 0.5;
+		}
+
+		@container playground (width < 52rem) {
+			& .pg-size__more {
+				display: none;
+			}
+		}
+
+		@container playground (width < 30rem) {
+			& .pg-size__total {
+				display: none !important; /* over data-show */
+			}
 		}
 	}
 

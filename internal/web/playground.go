@@ -10,12 +10,14 @@ import (
 	"io/fs"
 	"net/http"
 	"net/url"
+	"path"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/a-h/templ"
 	"github.com/starfederation/datastar-go/datastar"
+	"github.com/zweiundeins/lith/edge"
 
 	"starbase/internal/commands"
 	"starbase/internal/queries"
@@ -23,10 +25,10 @@ import (
 )
 
 // playgroundRun serves the code playground's runner: the page inside the
-// preview iframe. It is always embedded with sandbox="allow-scripts" (no
-// allow-same-origin), so user code runs in an opaque origin: it cannot read
-// the site's cookies, storage or DOM. The page has its own CSP; the site's
-// nonce-only policy would forbid running user code at all.
+// preview iframe. It is always embedded with sandbox="allow-scripts
+// allow-modals" (no allow-same-origin), so user code runs in an opaque
+// origin: it cannot read the site's cookies, storage or DOM. The page has its
+// own CSP; the site's nonce-only policy would forbid running user code at all.
 //
 // Protocol (postMessage, all messages carry source: "sb-runner"):
 //
@@ -34,9 +36,15 @@ import (
 //	parent → runner  {type: "run", files: {"component.js", "index.html", "style.css"}, deps: [urls], theme, base}
 //
 // base (optional) is the URL relative imports in component.js resolve
-// against: the folder the component's other files are served from.
+// against: the folder the component's other files are served from. Instead
+// of component.js, files may hold component.ts: the runner has the server
+// strip its types (/playground/transpile) and reports errors at its lines.
 //
 //	runner → parent  {type: "console", level, args: [string]} | {type: "error", message, line} | {type: "done"}
+//
+// The runner stops endless loops in component.js (see guardLoops in the
+// script): a hung frame can't be stopped from outside, and in Chrome it also
+// hangs every other preview frame of the site.
 func (s *Server) playgroundRun(w http.ResponseWriter, r *http.Request) {
 	scheme := "http"
 	if s.secure {
@@ -55,6 +63,7 @@ func (s *Server) playgroundRun(w http.ResponseWriter, r *http.Request) {
 	h.Set("Content-Type", "text/html; charset=utf-8")
 
 	imports, _ := json.Marshal(map[string]any{"imports": map[string]string{"datastar": origin + s.assets.Datastar()}})
+	transpile, _ := json.Marshal(origin + "/playground/transpile")
 	var css strings.Builder
 	fmt.Fprintf(&css, `<link rel="stylesheet" href="%s">`, html.EscapeString(origin+s.assets.RunnerCSS()))
 	fmt.Fprintf(w, `<!DOCTYPE html>
@@ -74,6 +83,7 @@ func (s *Server) playgroundRun(w http.ResponseWriter, r *http.Request) {
 <script type="importmap">%s</script>
 <script>
 (() => {
+	const TRANSPILE = %s
 	const send = (m) => parent.postMessage({ source: 'sb-runner', ...m }, '*')
 	const fmt = (a) => {
 		if (typeof a === 'string') return a
@@ -84,8 +94,111 @@ func (s *Server) playgroundRun(w http.ResponseWriter, r *http.Request) {
 		const orig = console[level]
 		console[level] = (...args) => { send({ type: 'console', level, args: args.map(fmt) }); orig.apply(console, args) }
 	}
-	addEventListener('error', (e) => send({ type: 'error', message: e.message, line: e.lineno }))
+	// Transpiled TypeScript: lines[i] is the line written for line i + 1 of its JavaScript.
+	let lines = null, blob = ''
+	const written = (line) => (lines && lines[line - 1]) || line
+	addEventListener('error', (e) => send({ type: 'error', message: e.message, line: e.error && e.error.line ? written(e.error.line) : e.filename === blob ? written(e.lineno) : e.lineno }))
 	addEventListener('unhandledrejection', (e) => send({ type: 'error', message: String(e.reason && e.reason.message || e.reason) }))
+
+	// Loop guard. An endless loop would hang this frame for good (the host
+	// can only replace it). Every while (…) and for (…; …; …) condition in
+	// component.js first calls __sbLoop(line), which throws once one task has
+	// spent a second in loops; it stays tripped until the task ends, so a
+	// catch inside an outer loop can't keep it going. It reads the clock on
+	// every 1024th call only: a tight loop must stay tight.
+	let loopStart = 0, calls = 0
+	self.__sbLoop = (line) => {
+		if (++calls & 1023) return true
+		const now = performance.now()
+		if (!loopStart) loopStart = now, setTimeout(() => (loopStart = 0))
+		else if (now - loopStart > 1000) throw Object.assign(new RangeError('Endless loop? Stopped after 1 s'), { line })
+		return true
+	}
+	// The scanner skips strings, comments, regular expressions and template
+	// text, and only ever inserts text into a loop header. Where it guesses
+	// wrong, the code no longer parses and runs as written instead.
+	const BT = '\x60' // a backtick (this script lives in a Go raw string)
+	const guardLoops = (src) => {
+		const toks = [], tpl = [], n = src.length
+		let i = 0, depth = 0
+		// Template text from i to the closing backtick, or to a ${ (then code).
+		const text = () => {
+			for (; i < n; i++) {
+				if (src[i] === '\\') i++
+				else if (src[i] === BT) return void i++
+				else if (src[i] === '$' && src[i + 1] === '{') return void (i += 2, tpl.push(depth++))
+			}
+		}
+		// A slash starts a regular expression unless it follows a value.
+		const regexOK = () => {
+			const t = toks[toks.length - 1]
+			return !t || (t.p ? !')]'.includes(t.v) : /^(return|typeof|instanceof|in|of|new|delete|void|throw|case|do|else|yield|await)$/.test(t.v))
+		}
+		while (i < n) {
+			const c = src[i], d = src[i + 1]
+			if (/\s/.test(c)) i++
+			else if (c === '/' && d === '/') i = (src.indexOf('\n', i) + 1 || n + 1) - 1
+			else if (c === '/' && d === '*') i = (src.indexOf('*/', i + 2) + 1 || n - 1) + 1
+			else if (c === '"' || c === "'") {
+				let j = i + 1
+				while (j < n && src[j] !== c && src[j] !== '\n') j += src[j] === '\\' ? 2 : 1
+				i = j + 1
+				toks.push({ v: '"' })
+			} else if (c === BT) {
+				i++
+				text()
+				toks.push({ v: '"' })
+			} else if (c === '/' && regexOK()) {
+				let j = i + 1, cls = false
+				for (; j < n && src[j] !== '\n'; j++) {
+					if (src[j] === '\\') j++
+					else if (src[j] === '[') cls = true
+					else if (src[j] === ']') cls = false
+					else if (src[j] === '/' && !cls) break
+				}
+				if (src[j] === '/') i = j + 1, toks.push({ v: '"' })
+				else toks.push({ v: c, p: 1, at: i++ }) // no closing slash on the line: a division
+			} else if (/[\p{L}\p{N}_$\\]/u.test(c)) {
+				const w = /^[\p{L}\p{N}_$\\\u200c\u200d]+/u.exec(src.slice(i, i + 256))[0]
+				toks.push({ v: w, at: i })
+				i += w.length
+			} else if (c === '}' && tpl[tpl.length - 1] === depth - 1) {
+				depth--, tpl.pop(), i++
+				text()
+				toks.push({ v: '"' })
+			} else {
+				if (c === '{') depth++
+				else if (c === '}') depth--
+				toks.push({ v: c, p: 1, at: i++ })
+			}
+		}
+		const ins = []
+		for (let k = 0; k < toks.length; k++) {
+			const w = toks[k].v, prev = toks[k - 1] && toks[k - 1].v
+			if ((w !== 'while' && w !== 'for') || prev === '.' || prev === '#' || !toks[k + 1] || toks[k + 1].v !== '(') continue
+			// The header: up to the matching parenthesis, and its top-level semicolons.
+			let open = 0, m = k + 1
+			const semis = []
+			for (; m < toks.length; m++) {
+				const t = toks[m]
+				if (!t.p) continue
+				if ('([{'.includes(t.v)) open++
+				else if (')]}'.includes(t.v) && !--open) break
+				else if (t.v === ';' && open === 1) semis.push(t.at)
+			}
+			if (m === toks.length || (w === 'for' && semis.length !== 2)) continue // for…of, for…in
+			let a = w === 'for' ? semis[0] + 1 : toks[k + 1].at + 1, b = w === 'for' ? semis[1] : toks[m].at
+			while (a < b && /\s/.test(src[a])) a++
+			while (b > a && /\s/.test(src[b - 1])) b--
+			const call = '__sbLoop(' + src.slice(0, toks[k].at).split('\n').length + ')'
+			if (a < b) ins.push([b, ')'], [a, call + ' && ('])
+			else if (w === 'for') ins.push([a, call]) // for (;;)
+		}
+		let out = src
+		for (const [at, str] of ins.sort((x, y) => y[0] - x[0])) out = out.slice(0, at) + str + out.slice(at)
+		return out
+	}
+
 	let ran = false
 	addEventListener('message', async (e) => {
 		const m = e.data
@@ -102,13 +215,34 @@ func (s *Server) playgroundRun(w http.ResponseWriter, r *http.Request) {
 		try {
 			// The edited code first: Rocket must never see the site's copy of its tag.
 			let js = files['component.js'] || ''
+			if (files['component.ts'] != null) {
+				const res = await fetch(TRANSPILE, { method: 'POST', body: files['component.ts'] })
+				if (!res.ok) throw new Error('The server could not strip the types: ' + res.status)
+				const t = await res.json()
+				if (t.error) throw Object.assign(new SyntaxError(t.error), { line: t.line })
+				js = t.code
+				lines = t.lines
+			}
 			// A blob has no folder: resolve relative imports (vendored files) against base.
 			if (m.base) js = js.replace(/(\bfrom\s*|\bimport\s*\(\s*|\bimport\s+)(['"])(\.{1,2}\/[^'"\n]*)\2/g, (_, pre, q, spec) => pre + q + new URL(spec, m.base).href + q)
-			if (js.trim()) await import(URL.createObjectURL(new Blob([js], { type: 'text/javascript' })))
+			if (js.trim()) {
+				const load = (code) => import((blob = URL.createObjectURL(new Blob([code], { type: 'text/javascript' }))))
+				const guarded = guardLoops(js)
+				self.__sbStarted = 0
+				try {
+					await load(guarded === js ? js : '__sbStarted = 1;' + guarded)
+				} catch (err) {
+					// A SyntaxError before the code started: the guard broke it, so run it as written.
+					if (guarded === js || self.__sbStarted || !(err instanceof SyntaxError)) throw err
+					await load(js)
+				}
+			}
 			for (const url of m.deps || []) await import(url)
 			await import('datastar')
 		} catch (err) {
-			send({ type: 'error', message: String(err && err.message || err) })
+			// The line: the loop guard's, else the edited code's innermost frame in the stack.
+			const at = blob && String(err && err.stack || '').split(blob + ':')[1]
+			send({ type: 'error', message: String(err && err.message || err), line: err && err.line ? written(err.line) : at ? written(parseInt(at)) : undefined })
 		}
 		send({ type: 'done' })
 	})
@@ -118,7 +252,7 @@ func (s *Server) playgroundRun(w http.ResponseWriter, r *http.Request) {
 </head>
 <body></body>
 </html>
-`, css.String(), imports)
+`, css.String(), imports, transpile)
 }
 
 // Starter files for an empty playground (the same starter as the
@@ -167,8 +301,9 @@ rocket('sb-your-name', {
 const starterHTML = `<sb-your-name label="Hello, Starbase"></sb-your-name>
 `
 
-// componentDeps maps every catalog tag to its module URL, so previews can
-// use any component. Tags defined by the edited code are skipped client-side.
+// componentDeps maps every catalog tag to its one-file bundle, so previews
+// can use any component. Tags defined by the edited code are skipped
+// client-side.
 func (s *Server) componentDeps() string {
 	m := map[string]string{}
 	for _, c := range s.catalog.Components {
@@ -180,7 +315,7 @@ func (s *Server) componentDeps() string {
 
 func (s *Server) codePlaygroundPage(rc *renderCtx) (view, error) {
 	files := map[string]string{"component.js": starterJS, "index.html": starterHTML}
-	v := ui.CodePlaygroundView{Deps: s.componentDeps(), Share: rc.tab.PlaygroundShare}
+	v := ui.CodePlaygroundView{Deps: s.cache.deps(), Share: rc.tab.PlaygroundShare}
 	q := rc.req.URL.Query()
 	if id := q.Get("s"); id != "" {
 		sn, err := rc.r.Snippet(rc.ctx, id)
@@ -204,21 +339,26 @@ func (s *Server) codePlaygroundPage(rc *renderCtx) (view, error) {
 			return view{}, err
 		}
 		files = p.Files
-		v.Preview = cmp.Or(p.Name, "This component")
+		v.Preview, v.PreviewRef = cmp.Or(p.Name, "This component"), ref
 		v.Base = "/playground/preview/" + ref + "/"
 	} else if slug := q.Get("component"); slug != "" {
 		comp, ok := s.catalog.Get(slug)
 		if !ok {
 			return view{}, errNotFound
 		}
-		src, err := fs.ReadFile(s.catalog.FS, comp.Script)
+		src, err := fs.ReadFile(s.catalog.FS, comp.SourceFile)
 		if err != nil {
 			return view{}, err
 		}
-		files = map[string]string{"component.js": string(src), "index.html": strings.Join(comp.Examples, "\n\n") + "\n"}
+		files = map[string]string{"component" + path.Ext(comp.SourceFile): string(src), "index.html": strings.Join(comp.Examples, "\n\n") + "\n"}
 		v.Component, v.ComponentName = comp.Slug, comp.Name
 		v.Base = "/c/" + comp.Slug + "@" + comp.Hash + "/"
 	}
+	main := "component.js"
+	if _, ok := files["component.ts"]; ok {
+		main = "component.ts"
+	}
+	v.Size = s.measure(v.Component, main, files[main])
 	initial, _ := json.Marshal(files)
 	v.Initial = string(initial)
 	title := "Playground · Starbase"
@@ -230,6 +370,13 @@ func (s *Server) codePlaygroundPage(rc *renderCtx) (view, error) {
 	}
 	if v.Share != "" {
 		v.ShareURL = strings.TrimSuffix(s.cfg.BaseURL, "/") + "/playground?s=" + v.Share
+		shared := files
+		if v.Share != v.Loaded {
+			if sn, err := rc.r.Snippet(rc.ctx, v.Share); err == nil && sn != nil {
+				shared = sn.Files
+			}
+		}
+		_, v.ShareTS = shared["component.ts"]
 	}
 	u := ""
 	if rc.tab.PlaygroundShare != "" {
@@ -268,14 +415,14 @@ func (s *Server) cmdSnippet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now()
-	if !s.saveLimit.allow(sessionID(r), 1, now) || !s.saveLimitIP.allow(clientIP(r), 1, now) {
+	if !s.saveLimit.allow(edge.SessionID(r.Context()), 1, now) || !s.saveLimitIP.allow(edge.ClientKey(r), 1, now) {
 		http.Error(w, "saving too often, try again in a minute", http.StatusTooManyRequests)
 		return
 	}
 	var uid int64
 	var stored int64
 	s.q.View(r.Context(), func(rd *queries.Reader) error {
-		if u, _ := rd.SessionUser(r.Context(), sessionID(r)); u != nil {
+		if u, _ := rd.SessionUser(r.Context(), edge.SessionID(r.Context())); u != nil {
 			uid = u.ID
 		}
 		stored, _ = rd.SnippetBytes(r.Context())
@@ -289,17 +436,15 @@ func (s *Server) cmdSnippet(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.catalog.Get(p.Component); !ok {
 		p.Component = ""
 	}
-	s.send(w, r, commands.SaveSnippet{SID: sessionID(r), TabID: p.TabID, ID: snippetID(), Files: p.Files, Component: p.Component, UserID: uid})
+	s.send(w, r, commands.SaveSnippet{SID: edge.SessionID(r.Context()), TabID: p.TabID, ID: snippetID(), Files: p.Files, Component: p.Component, UserID: uid})
 }
 
 // snippetJSON is the public, read-only form of a snippet (used by the
 // submission bot to import playground links).
 func (s *Server) snippetJSON(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	var sn *queries.Snippet
-	err := s.q.View(r.Context(), func(rd *queries.Reader) (err error) {
-		sn, err = rd.Snippet(r.Context(), id)
-		return
+	sn, err := s.q.ViewValue(r.Context(), func(rd *queries.Reader) (*queries.Snippet, error) {
+		return rd.Snippet(r.Context(), id)
 	})
 	if err != nil {
 		s.fail(w, r, err)
@@ -324,10 +469,8 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 	form := strings.TrimSuffix(s.cfg.RepoURL, "/") + "/issues/new"
 	q := url.Values{"template": {"new-component.yml"}}
 	if id := r.URL.Query().Get("s"); commands.SnippetIDRe.MatchString(id) {
-		var sn *queries.Snippet
-		s.q.View(r.Context(), func(rd *queries.Reader) (err error) {
-			sn, err = rd.Snippet(r.Context(), id)
-			return
+		sn, _ := s.q.ViewValue(r.Context(), func(rd *queries.Reader) (*queries.Snippet, error) {
+			return rd.Snippet(r.Context(), id)
 		})
 		if sn != nil {
 			q.Set("source", strings.TrimSuffix(s.cfg.BaseURL, "/")+"/playground?s="+id)

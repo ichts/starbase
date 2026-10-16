@@ -69,14 +69,14 @@ func TestPlaygroundControls(t *testing.T) {
 	}
 
 	var sig map[string]any
-	if err := json.Unmarshal([]byte(pg.Signals()), &sig); err != nil || sig["yaw"] != 30.0 || sig["showValue"] != true {
+	if err := json.Unmarshal([]byte(pg.Signals()), &sig); err != nil || sig["yaw"] != 30.0 || sig["showValue"] != true || sig[catalog.SmoothSignal] != false {
 		t.Errorf("signals = %s (%v)", pg.Signals(), err)
 	}
 
 	el := pg.Element()
 	for _, want := range []string{
 		` yaw="30" data-attr:yaw="$_pg.yaw"`,
-		`data-attr:spin="$_pg.spin"`,
+		`data-attr:spin="$_pg.spin || (el.spin = false)"`,
 		`data-attr:show-value="$_pg.showValue ? null : 'false'"`,
 		`data-attr:label="$_pg.label || null"`,
 		`>Hello</sb-widget>`,
@@ -85,6 +85,22 @@ func TestPlaygroundControls(t *testing.T) {
 		if !strings.Contains(el, want) {
 			t.Errorf("element lacks %q:\n%s", want, el)
 		}
+	}
+}
+
+// An event named in sync moves the controls of the props its detail
+// reports, snapped to their steps, on the live element only.
+func TestPlaygroundSync(t *testing.T) {
+	pg := pgComponent(t, `playground:
+  props: {zoom: {min: 0.5, max: 3, step: 0.05}}
+  sync: {sb-orbit: [yaw, zoom, spin, nope]}
+`).Playground()
+	want := ` data-on:sb-orbit="$_pg.yaw = Math.round(evt.detail.yaw); $_pg.zoom = +(Math.round(evt.detail.zoom / 0.05) * 0.05).toFixed(2)"`
+	if !strings.Contains(pg.Element(), want) {
+		t.Errorf("element lacks %q:\n%s", want, pg.Element())
+	}
+	if strings.Contains(pg.Markup(), "sb-orbit") {
+		t.Errorf("the shown markup has the sync listener: %s", pg.Markup())
 	}
 }
 

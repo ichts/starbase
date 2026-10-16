@@ -9,6 +9,7 @@
       "required": false,
       "values": [
         "js",
+        "ts",
         "html",
         "css"
       ],
@@ -53,7 +54,17 @@
       "default": false,
       "required": false,
       "docs": {
-        "description": "Make the code read-only."
+        "description": "Make the code read-only (a form still submits it)."
+      }
+    },
+    {
+      "name": "disabled",
+      "attribute": "disabled",
+      "type": "boolean",
+      "default": false,
+      "required": false,
+      "docs": {
+        "description": "Disable editing; a form doesn't submit it, like a disabled <textarea>."
       }
     },
     {
@@ -83,7 +94,17 @@
       "default": "",
       "required": false,
       "docs": {
-        "description": "Name reported in sb-change (e.g. the field of a command)."
+        "description": "Name reported in sb-change and submitted with the form it sits in (e.g. the field of a command)."
+      }
+    },
+    {
+      "name": "diagnostics",
+      "attribute": "diagnostics",
+      "type": "json",
+      "default": [],
+      "required": false,
+      "docs": {
+        "description": "Problems to underline, as JSON [{line, col, length, message, text}]: line and col 1-based, col and length in UTF-16 code units (a JS string index). With text, a problem shows only while the code there still reads text, so a list about an older version fades as the code changes."
       }
     }
   ],

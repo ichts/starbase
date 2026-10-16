@@ -1,5 +1,8 @@
 import { rocket } from 'datastar'
 
+// :focus-visible, not .btn:focus-visible, which would outrank .pixel's frame.
+// Its transparent outline is what forced colors show, where box-shadows are
+// dropped.
 const styles = /* css */ `
 :host {
 	--_brand: var(--sb-brand, #8C6BFF);
@@ -8,18 +11,40 @@ const styles = /* css */ `
 	--_brand-subtle: var(--sb-brand-subtle, rgb(140 107 255 / 0.14));
 	--_text: var(--sb-text-1, #F3F4FA);
 	--_on-brand: var(--sb-text-on-brand, #F3F4FA);
-	--_border: var(--sb-border, #283552);
-	--_hover: var(--sb-surface-hover, #1A2440);
+	--_hover: var(--sb-surface-hover, #1A2540);
 	--_bg: var(--sb-bg, #080D1D);
 	--_radius: var(--sb-control-radius, 6px);
 	--_frame: var(--sb-frame-color, #B09AFF);
 	--_step: var(--sb-frame-step, 3px);
-	--_display: var(--sb-font-display, "Pixelify Sans", ui-monospace, monospace);
 	--_focus: var(--sb-focus-ring, 0 0 0 2px #080D1D, 0 0 0 4px #B09AFF);
+	--_notch: var(--sb-notch, 1);
 	display: inline-block;
 	vertical-align: middle;
 }
-:host([disabled]) { pointer-events: none; opacity: 0.5; }
+:host([hidden]) { display: none; }
+/* The same pixel spinner as sb-busy, sized to the button's own text so it
+   follows the label at every size. It only exists while loading, so an idle
+   button is exactly as wide as it would be without it. At notch 0 the blocks
+   are dots, and the lit one fades out over the turn, so a trail follows it round. */
+.spin { position: relative; flex: none; inline-size: 1em; block-size: 1em; }
+.spin i {
+	position: absolute;
+	inset: 0;
+	margin: auto;
+	inline-size: 0.22em;
+	block-size: 0.22em;
+	border-radius: calc(0.11em * (1 - var(--_notch)));
+	background: currentColor;
+	opacity: 0.22;
+	transform: rotate(calc(var(--i) * 45deg)) translateY(-0.39em);
+	animation: sb-button-blink 720ms steps(calc(1 + 999 * (1 - var(--_notch))), end) infinite;
+	animation-delay: calc(var(--i) * 90ms);
+}
+@keyframes sb-button-blink { 0% { opacity: 1; } 12.5% { opacity: calc(0.22 + 0.38 * (1 - var(--_notch))); } 100% { opacity: 0.22; } }
+@media (prefers-reduced-motion: reduce) {
+	.spin i { animation: none; opacity: 0.3; }
+	.spin i:first-child { opacity: 1; }
+}
 .btn {
 	all: unset;
 	box-sizing: border-box;
@@ -39,10 +64,11 @@ const styles = /* css */ `
 	white-space: nowrap;
 	cursor: pointer;
 	user-select: none;
-	transition: background 120ms, border-color 120ms, translate 120ms, box-shadow 120ms;
+	transition: background 120ms, border-color 120ms, translate 120ms, box-shadow 120ms, filter 120ms;
 }
-.btn:focus-visible { box-shadow: var(--_focus); }
-.btn:active { translate: 0 1px; }
+:focus-visible { box-shadow: var(--_focus); outline: 2px solid transparent; outline-offset: 2px; }
+:disabled { pointer-events: none; opacity: 0.5; }
+[aria-busy] { cursor: progress; }
 .sm { --_h: 2rem; --_px: 0.75rem; --_fs: 0.8125rem; }
 .md { --_h: 2.5rem; --_px: 1.125rem; --_fs: 0.875rem; }
 .lg { --_h: 3rem; --_px: 1.5rem; --_fs: 1rem; }
@@ -53,6 +79,8 @@ const styles = /* css */ `
 .outline:hover { background: var(--_brand-subtle); }
 .ghost:hover { background: var(--_hover); }
 .danger { background: var(--sb-danger, #F2777A); border-color: var(--sb-danger, #F2777A); color: var(--sb-text-on-danger, #1B0A0C); }
+.danger:hover { filter: brightness(1.1); }
+.btn:active { translate: 0 1px; }
 
 /* 8-bit: light plate, notched frame, hard drop shadow. */
 .pixel {
@@ -61,10 +89,10 @@ const styles = /* css */ `
 	border-radius: 0;
 	background: var(--_text);
 	color: var(--_bg);
-	font-family: var(--_display);
+	font-family: var(--sb-font-display, inherit); /* the page's font unless a theme sets a display font */
 	font-weight: 700;
 	letter-spacing: 0.1em;
-	text-transform: uppercase;
+	text-transform: var(--sb-display-case, uppercase);
 	--_shadow: calc(var(--_step) * 2);
 	box-shadow:
 		0 calc(-1 * var(--_step)) 0 0 var(--_frame),
@@ -76,9 +104,12 @@ const styles = /* css */ `
 .pixel:hover { translate: -1px -1px; --_shadow: calc(var(--_step) * 3); }
 .pixel:active { translate: var(--_step) var(--_step); --_shadow: var(--_step); }
 .pixel:focus-visible { outline: 2px solid var(--_frame); outline-offset: calc(var(--_step) * 3); }
+@media (forced-colors: active) {
+	.pixel { outline: 1px solid ButtonBorder; }
+	.spin i { forced-color-adjust: none; background: CanvasText; }
+}
 
-svg { inline-size: 1.1em; block-size: 1.1em; flex: none; }
-::slotted(svg) { inline-size: 1.1em; block-size: 1.1em; }
+svg, ::slotted(svg) { inline-size: 1.1em; block-size: 1.1em; flex: none; }
 `
 
 rocket('sb-button', {
@@ -90,6 +121,8 @@ rocket('sb-button', {
 		href: string.trim.docs({ description: 'Render as a link to this URL.' }),
 		caret: bool.docs({ description: 'Show a trailing chevron.' }),
 		disabled: bool.docs({ description: 'Disable interaction.' }),
+		loading: bool.docs({ description: 'The button\'s action is running: an inline spinner, clicks (mouse, Enter, Space) blocked, aria-busy. Bind it to data-indicator (and add data-preserve-attr="loading").' }),
+		ariaLabel: string.trim.docs({ description: 'Accessible name, passed on to the inner button or link: set it on icon-only buttons.' }),
 	}),
 	manifest: {
 		slots: [
@@ -98,16 +131,32 @@ rocket('sb-button', {
 			{ name: 'suffix', description: 'An icon after the label.' },
 		],
 	},
-	setup: ({ adoptStyles, host }) => adoptStyles(host, styles),
-	render: ({ html, props: { variant, size, href, caret, disabled } }) => {
+	setup: ({ adoptStyles, cleanup, host, props }) => {
+		adoptStyles(host, styles)
+		// While loading the button stays focusable (a disabled button would drop
+		// the focus mid-action) but does nothing: the capture phase runs before
+		// the page's own data-on:click on this same element. Enter and Space
+		// arrive as that click too, so keys (Tab, Escape, shortcuts) are left
+		// alone. Disabled blocks the clicks a script sends to the host itself.
+		const block = (evt) => {
+			if (!props.loading && !props.disabled) return
+			evt.preventDefault()
+			evt.stopImmediatePropagation()
+		}
+		host.addEventListener('click', block, true)
+		cleanup(() => host.removeEventListener('click', block, true))
+	},
+	render: ({ html, props: { variant, size, href, caret, disabled, loading, ariaLabel } }) => {
 		const inner = html`
+			${loading ? html`<span class="spin" part="spinner" aria-hidden="true">${Array.from({ length: 8 }, (_, i) => html`<i style="--i: ${i}"></i>`)}</span>` : null}
 			<slot name="prefix"></slot>
 			<slot></slot>
 			<slot name="suffix"></slot>
 			${caret ? html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="square" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>` : null}
 		`
+		const busy = loading ? 'true' : null
 		return href && !disabled
-			? html`<a class="btn ${variant} ${size}" part="button" href="${href}">${inner}</a>`
-			: html`<button class="btn ${variant} ${size}" part="button" type="button" disabled="${disabled}">${inner}</button>`
+			? html`<a class="btn ${variant} ${size}" part="button" href="${href}" aria-label="${ariaLabel}" aria-busy="${busy}" aria-disabled="${busy}">${inner}</a>`
+			: html`<button class="btn ${variant} ${size}" part="button" type="button" disabled="${disabled}" aria-label="${ariaLabel}" aria-busy="${busy}" aria-disabled="${busy}">${inner}</button>`
 	},
 })

@@ -10,11 +10,13 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"strings"
 	"syscall"
 	"time"
 
 	"starbase/internal/app"
+	"starbase/internal/catalog"
 	"starbase/internal/config"
 )
 
@@ -43,8 +45,12 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	if _, set := os.LookupEnv("GOMEMLIMIT"); !set {
+		debug.SetMemoryLimit(app.MemoryLimit)
+	}
 	log.Info("starting", "version", version)
 	cfg.Version = version
+	catalog.SourceURL = strings.TrimSuffix(cfg.RepoURL, "/") + "/blob/main/"
 	a, err := app.New(ctx, cfg, log)
 	if err != nil {
 		return err

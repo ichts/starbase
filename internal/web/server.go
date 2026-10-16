@@ -9,68 +9,122 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
+
+	"github.com/zweiundeins/lith/edge"
+	"github.com/zweiundeins/lith/live"
+	"github.com/zweiundeins/lith/writer"
 
 	"starbase/internal/catalog"
 	"starbase/internal/config"
-	"starbase/internal/cqrs"
 	"starbase/internal/queries"
+	"starbase/internal/tscheck"
 )
 
 type Server struct {
-	ctx     context.Context // cancelled on shutdown; ends render streams
-	cfg     config.Config
-	log     *slog.Logger
-	bus     *cqrs.Bus
-	hub     *cqrs.Hub
-	q       *queries.Queries
-	catalog *catalog.Catalog
-	content fs.FS
-	assets  *assets
-	oauth   *oauthConfig
-	boot    string
-	secure  bool
+	ctx      context.Context // cancelled on shutdown; ends the telemetry streams
+	cfg      config.Config
+	log      *slog.Logger
+	writer   *writer.Writer
+	hub      *live.Hub
+	q        *queries.Queries
+	catalog  *catalog.Catalog
+	content  fs.FS
+	assets   *assets
+	oauth    *oauthConfig
+	boot     string
+	secure   bool
+	sessions edge.Sessions
 
+	cache        *renderCache // what pages render from the binary's content alone (rendercache.go)
 	previews     *previewCache
 	board        atomic.Pointer[boardCache]
+	boardRegion  *region  // the Showcase's board, a view of its own
 	paintLimit   *limiter // per session
 	paintLimitIP *limiter
 	saveLimit    *limiter // snippets, per session
 	saveLimitIP  *limiter
+	sizeLimit    *limiter // playground size line, per session
+	sizeLimitIP  *limiter
+	sizeMu       sync.Mutex
+	sizes        map[[32]byte]map[string]any // playground code → $_size (playground_size.go)
+	checker      *tscheck.Checker            // nil without an embedded compiler
+	checkLimit   *limiter                    // playground type checks, per session
+	checkLimitIP *limiter
+	checkMu      sync.Mutex
+	checks       map[[32]byte][]tscheck.Diagnostic // playground code → its diagnostics (playground_check.go)
+
+	transpileLimit *limiter // the runner's TypeScript, per client (it has no session)
+	transpileMu    sync.Mutex
+	transpiled     map[[32]byte][]byte // component.ts → the JSON answer (playground_transpile.go)
+
+	exportLimit   *limiter // the star catalog's downloads, per session
+	exportLimitIP *limiter
+	exports       chan struct{} // the downloads streaming now, each holding a read connection
+
+	starsMu      sync.Mutex
+	starsLongest queries.DemoStarLongest // the star catalog's longest values (starLongest), for starsTotal stars
+	starsTotal   int
+
+	streamCap *streamCap // render streams per client
+	capWarn   quietWarn  // clients at their cap
+	roomWarn  quietWarn  // the streams' budget full: memory caps the streams
+	fullWarn  quietWarn  // the hub at MaxStreams, a backstop
 }
 
 type Deps struct {
 	Config   config.Config
 	Log      *slog.Logger
-	Bus      *cqrs.Bus
-	Hub      *cqrs.Hub
+	Writer   *writer.Writer
+	Hub      *live.Hub
 	Queries  *queries.Queries
 	Catalog  *catalog.Catalog
 	StaticFS fs.FS
 	Content  fs.FS
+	Checker  *tscheck.Checker // optional: the playground's type check
 }
 
 func New(ctx context.Context, d Deps) *Server {
+	secure := strings.HasPrefix(d.Config.BaseURL, "https://")
 	s := &Server{
-		ctx:     ctx,
-		cfg:     d.Config,
-		log:     d.Log,
-		bus:     d.Bus,
-		hub:     d.Hub,
-		q:       d.Queries,
-		catalog: d.Catalog,
-		content: d.Content,
-		assets:  newAssets(d.StaticFS, d.Catalog, d.Config.Dev),
-		boot:    strings.ToLower(randomToken(6)),
-		secure:  strings.HasPrefix(d.Config.BaseURL, "https://"),
+		ctx:      ctx,
+		cfg:      d.Config,
+		log:      d.Log,
+		writer:   d.Writer,
+		hub:      d.Hub,
+		q:        d.Queries,
+		catalog:  d.Catalog,
+		content:  d.Content,
+		assets:   newAssets(d.StaticFS, d.Catalog, d.Config.Dev),
+		boot:     strings.ToLower(randomToken(6)),
+		secure:   secure,
+		sessions: edge.Sessions{Secure: secure, Accept: legacySessionID.MatchString},
 
 		paintLimit:   newLimiter(20, 60), // pixels per second, burst
 		paintLimitIP: newLimiter(60, 180),
 		saveLimit:    newLimiter(0.1, 10), // snippet saves: 6 a minute
 		saveLimitIP:  newLimiter(0.5, 30),
+		sizeLimit:    newLimiter(3, 20), // size measurements: the client debounces edits
+		sizeLimitIP:  newLimiter(10, 60),
+		sizes:        map[[32]byte]map[string]any{},
+		checker:      d.Checker,
+		checkLimit:   newLimiter(3, 20), // like sizes: after debounced edits and runs
+		checkLimitIP: newLimiter(10, 60),
+		checks:       map[[32]byte][]tscheck.Diagnostic{},
 		previews:     newPreviewCache(d.Config.RepoURL, d.Config.GitHubToken),
+
+		transpileLimit: newLimiter(5, 40), // once per run
+		transpiled:     map[[32]byte][]byte{},
+
+		exportLimit:   newLimiter(0.2, 3), // a download every five seconds, three in a row
+		exportLimitIP: newLimiter(1, 10),
+		exports:       make(chan struct{}, 2), // the read pool has at least four
+		streamCap:     newStreamCap(maxStreamsPerClient),
 	}
 	s.oauth = newOAuth(d.Config)
+	s.cache = newRenderCache(s)
+	s.boardRegion = s.newBoardRegion()
 	return s
 }
 
@@ -85,19 +139,21 @@ func (s *Server) Handler() http.Handler {
 	s.page(mux, "/themes", s.themesPage)
 	s.page(mux, "/contribute", s.contentPage("contribute", "contribute"))
 	s.page(mux, "/about", s.contentPage("about", "about"))
-	s.page(mux, "/showcase", s.showcasePage)
+	s.page(mux, "/showcase", s.showcasePage, s.boardRegion)
 	mux.Handle("GET /components", http.RedirectHandler("/", http.StatusMovedPermanently))
 	// The easiest way to contribute: a GitHub issue form, turned into a PR by a bot.
 	mux.HandleFunc("GET /submit", s.submit)
 
 	// Commands.
 	mux.HandleFunc("POST /cmd/browse", s.cmdBrowse)
+	mux.HandleFunc("POST /cmd/sort", s.cmdSort)
 	mux.HandleFunc("POST /cmd/star/{slug}", s.cmdStar(true))
 	mux.HandleFunc("POST /cmd/unstar/{slug}", s.cmdStar(false))
 	mux.HandleFunc("POST /cmd/theme/{theme}", s.cmdTheme)
 	mux.HandleFunc("POST /cmd/flight", s.cmdFlight) // the Showcase's commands demo
 	mux.HandleFunc("POST /cmd/theme-style/{style}", s.cmdThemeStyle)
 	mux.HandleFunc("POST /cmd/snippet", s.cmdSnippet)
+	mux.HandleFunc("POST /cmd/install-tab", s.cmdInstallTab)
 	mux.HandleFunc("POST /cmd/paint", s.cmdPaint)
 
 	// Auth.
@@ -119,12 +175,19 @@ func (s *Server) Handler() http.Handler {
 	// Code playground runner (sandboxed iframe page).
 	mux.HandleFunc("GET /playground/run", s.playgroundRun)
 	mux.HandleFunc("GET /playground/snippet/{id}", s.snippetJSON)
+	mux.HandleFunc("POST /playground/size", s.playgroundSize)
+	mux.HandleFunc("POST /playground/check", s.playgroundCheck)
+	mux.HandleFunc("POST /playground/transpile", s.playgroundTranspile)
 	mux.HandleFunc("GET /playground/preview/{commit}/{slug}/{file...}", s.servePreviewFile)
 
 	// Demo data: a read-only signal stream for the live examples.
 	mux.HandleFunc("GET /demo/telemetry", s.demoTelemetry)
 	mux.HandleFunc("GET /demo/data/children", s.demoChildren) // the example dataset (demo_data.go)
 	mux.HandleFunc("GET /demo/data/search", s.demoSearch)
+	mux.HandleFunc("GET /demo/data/list", s.demoList)
+	mux.HandleFunc("GET /demo/data/rows", s.demoRows)
+	mux.HandleFunc("GET /demo/data/rows/export", s.demoRowsExport)
+	mux.HandleFunc("GET /demo/arrange/{kind}", s.demoArrange) // drag-and-drop demos (demo_arrange.go)
 	mux.HandleFunc("OPTIONS /demo/", demoPreflight)
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -139,9 +202,9 @@ func (s *Server) Handler() http.Handler {
 
 	var h http.Handler = mux
 	h = s.sameOrigin(h)
-	h = s.session(h)
-	h = s.securityHeaders(h)
-	h = compress(h)
+	h = s.sessions.Handler(h)
+	h = edge.SecurityHeaders{Policy: s.csp, HSTS: s.secure}.Handler(h)
+	h = edge.Compress(h)
 	h = s.logRequests(h)
 	h = s.recoverer(h)
 	return h

@@ -1,39 +1,47 @@
-import { rocket } from 'datastar'
+import { rocket, startPeeking, stopPeeking } from 'datastar'
 // uqr (MIT), vendored unmodified from npm; see vendor.json.
 import { encode } from './vendor/uqr.mjs'
 
-// Module types from uqr: the three finder squares are "Position".
-const POSITION = 2
+// observeProps callbacks run inside the effect that set the attribute (a
+// data-attr binding): reads in them must not subscribe it.
+const peek = (fn) => {
+	startPeeking()
+	try {
+		return fn()
+	} finally {
+		stopPeeking()
+	}
+}
 
-// pathOf draws the dark modules (matching keep) as horizontal runs.
-const pathOf = (qr, keep) => {
-	let d = ''
-	qr.data.forEach((row, y) => {
-		for (let x = 0; x < row.length; ) {
-			if (!row[x] || !keep(qr.types?.[y]?.[x])) {
-				x++
-				continue
-			}
-			const start = x
-			while (x < row.length && row[x] && keep(qr.types?.[y]?.[x])) x++
-			d += `M${start} ${y}h${x - start}v1h-${x - start}z`
+// paths draws the dark modules as horizontal runs: [modules, corners]. With
+// accent, the finder squares (uqr type 2, "Position") go to the second path.
+const paths = ({ data, types }, accent) => {
+	const d = ['', '']
+	data.forEach((row, y) => {
+		for (let x = 0, s, k; x < row.length; ) {
+			if (!row[x]) { x++; continue }
+			k = +(accent && types[y][x] == 2)
+			for (s = x; row[x] && +(accent && types[y][x] == 2) == k; ) x++
+			d[k] += `M${s} ${y}h${x - s}v1h-${x - s}z`
 		}
 	})
 	return d
 }
 
+// The accent keeps the brand's hue at 50% lightness or less: finder squares
+// in a light brand colour (terminal's green is 1.6:1 on white) don't scan.
 const styles = /* css */ `
 :host {
 	--_fg: var(--sb-qr-color, #0B1224);
 	--_bg: var(--sb-qr-background, #FFFFFF);
-	--_eye: var(--sb-qr-accent, var(--sb-brand, #8C6BFF));
-	--_size: 10rem;
+	--_eye: var(--sb-qr-accent, oklch(from var(--sb-brand, #8C6BFF) min(l, .5) c h));
 	display: inline-block;
-	inline-size: var(--_size);
+	inline-size: 10rem;
 	aspect-ratio: 1;
 	line-height: 0;
 }
-svg { inline-size: 100%; block-size: 100%; image-rendering: pixelated; }
+:host([hidden]) { display: none; }
+svg { inline-size: 100%; block-size: 100%; }
 .bg { fill: var(--_bg); }
 .mod { fill: var(--_fg); }
 .eye { fill: var(--_eye); }
@@ -44,34 +52,30 @@ rocket('sb-qr-code', {
 	props: ({ bool, number, oneOf, string }) => ({
 		value: string.docs({ description: 'Text or URL to encode.' }),
 		ecc: oneOf('L', 'M', 'Q', 'H').default('M').docs({ description: 'Error correction: L 7%, M 15%, Q 25%, H 30% of the code can be damaged or covered.' }),
-		border: number.clamp(0, 8).default(2).docs({ description: 'Quiet zone around the code, in modules (the standard asks for 4; 2 scans fine on a plain background).' }),
-		accent: bool.docs({ description: 'Colour the three corner squares with --sb-qr-accent (default: the brand colour).' }),
+		border: number.round.clamp(0, 8).default(2).docs({ description: 'Quiet zone around the code, in modules (the standard asks for 4; 2 scans fine on a plain background).' }),
+		accent: bool.docs({ description: 'Colour the three corner squares with --sb-qr-accent (default: the brand colour, darkened where it is too light to scan).' }),
 		label: string.trim.docs({ description: 'Accessible name (default: "QR code: " and the value).' }),
 	}),
+	manifest: {
+		slots: [{ name: 'error', description: 'Replaces the "Too much data for a QR code" message, e.g. to translate it.' }],
+	},
 	renderOnPropChange: false,
 	setup: ({ $$, adoptStyles, host, observeProps, props }) => {
 		adoptStyles(host, styles)
 		const build = () => {
-			$$.error = ''
-			$$.name = props.label || (props.value ? 'QR code: ' + props.value : 'QR code')
-			if (!props.value) {
-				$$.n = 0
-				$$.mods = $$.eyes = ''
-				return
-			}
-			try {
-				const qr = encode(props.value, { ecc: props.ecc, border: props.border })
-				$$.n = qr.size
-				$$.mods = pathOf(qr, (t) => !props.accent || t !== POSITION)
-				$$.eyes = props.accent ? pathOf(qr, (t) => t === POSITION) : ''
-			} catch {
-				$$.n = 0
-				$$.mods = $$.eyes = ''
-				$$.error = 'Too much data for a QR code'
-			}
+			const { value, ecc, border, accent, label } = props
+			let qr = { size: 0, data: [] }, error = 0
+			// toWellFormed: uqr throws on a lone surrogate (text cut mid-emoji),
+			// so the only error left is too much data. Optional: browsers that run
+			// Rocket but lack it (Chrome < 111, Firefox < 119) still get a code.
+			if (value) try { qr = encode(value.toWellFormed?.() ?? value, { ecc, border }) } catch { error = 1 }
+			$$.name = label || 'QR code' + (value ? ': ' + value : '')
+			$$.error = error
+			$$.n = qr.size
+			;[$$.mods, $$.eyes] = paths(qr, accent)
 		}
 		build()
-		observeProps(build)
+		observeProps(() => peek(build))
 	},
 	render: ({ html }) => html`
 		<svg part="svg" role="img" shape-rendering="crispEdges"
@@ -80,8 +84,8 @@ rocket('sb-qr-code', {
 			data-effect="el.setAttribute('viewBox', '0 0 ' + $$n + ' ' + $$n)">
 			<rect class="bg" part="background" width="100%" height="100%"></rect>
 			<path class="mod" part="modules" data-attr:d="$$mods"></path>
-			<path class="eye" part="corners" data-attr:d="$$eyes || null"></path>
+			<path class="eye" part="corners" data-attr:d="$$eyes"></path>
 		</svg>
-		<div class="error" role="alert" data-show="$$error" data-text="$$error"></div>
+		<div class="error" part="error" role="alert" data-show="$$error"><slot name="error">Too much data for a QR code</slot></div>
 	`,
 })

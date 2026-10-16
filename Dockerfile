@@ -1,18 +1,24 @@
 # syntax=docker/dockerfile:1
 # Pure Go (SQLite via modernc.org/sqlite): cross-compile on the build
 # platform, no cgo, no emulation needed for multi-arch images.
-FROM --platform=$BUILDPLATFORM golang:1.27.1 AS build
+FROM --platform=$BUILDPLATFORM golang:1.27.2 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 ARG TARGETOS TARGETARCH VERSION=dev
+# The TypeScript compiler the binary embeds (the playground's type check),
+# with its licence and notices (Apache-2.0).
+RUN go run ./cmd/fetchtsc -os $TARGETOS -arch $TARGETARCH \
+	&& mkdir -p /out/typescript \
+	&& tar xzf internal/tscheck/dist/*.tgz -C /out/typescript --strip-components=1 package/LICENSE package/NOTICE.txt
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
 	go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/starbase ./cmd/starbase \
 	&& mkdir -p /out/data
 
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM gcr.io/distroless/static-debian13:nonroot
 COPY --from=build /out/starbase /starbase
+COPY --from=build /out/typescript /usr/share/doc/typescript
 COPY --from=build --chown=65532:65532 /out/data /data
 ENV ADDR=:7331 DB_PATH=/data/starbase.db
 VOLUME /data

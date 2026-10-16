@@ -8,6 +8,8 @@ tags: [meter, dial, dashboard, telemetry]
 since: 2026-09-21
 preview: |
   <sb-gauge value="72" label="Thrust" unit="%" style="--sb-gauge-size: 9.5rem"></sb-gauge>
+usage: |
+  <sb-gauge value="72" label="Thrust" unit="%"></sb-gauge>
 playground:
   props:
     value: {min: 0, max: 100}
@@ -17,7 +19,7 @@ playground:
   values: {value: 64, label: Thrust, unit: "%"}
 ---
 
-A half-dial drawn in pixels. The needle eases toward `value` on a slightly bouncy spring, and the arc behind it is coloured by zone: ok, warn or danger. When `danger` is below `warn`, low values are the bad ones, as with fuel.
+A half-dial drawn in pixels. The needle eases toward `value` on a slightly bouncy spring, and the arc behind it is coloured by zone: ok, warn or danger. When `danger` is below `warn`, low values are the bad ones, as with fuel. The dial only animates while it is on screen: one that scrolls back in eases to the latest value.
 
 ## Examples
 
@@ -42,12 +44,77 @@ A half-dial drawn in pixels. The needle eases toward `value` on a slightly bounc
 This site's demo endpoint streams telemetry as signal patches. The gauge follows `$_tm.vel` without any client code.
 
 ```html preview
-<div data-signals="{_tm: {vel: 0, temp: 18}}" data-init="@get('/demo/telemetry')" style="display: flex; gap: 32px; flex-wrap: wrap">
+<div data-signals="{_tm: {vel: 0, temp: 18}}" style="display: flex; gap: 32px; flex-wrap: wrap">
+  <div id="telemetry" hidden data-init="@get('/demo/telemetry', {retry: 'error', retryMaxCount: Infinity, retryInterval: 400, retryMaxWait: 4000})"></div>
   <sb-gauge label="Velocity" unit=" km/s" max="8" warn="9" danger="10" decimals="2" data-attr:value="$_tm.vel" data-preserve-attr="value"></sb-gauge>
   <sb-gauge label="Hull" unit="°C" max="1200" warn="800" danger="1000" data-attr:value="$_tm.temp" data-preserve-attr="value"></sb-gauge>
 </div>
 ```
 
+The endpoint is Go with the `sse` package of lith, Starbase's runtime; any [Datastar SDK](https://data-star.dev/reference/sdks) works the same way. `TelemetryAt` computes the sample from the clock, so every viewer watches the same flight. When the server stops for a deploy, its last event replaces the hidden element by a copy, which opens the stream again, and `retry: 'error'` keeps asking until the next process answers:
+
+```go source=internal/web/demo.go#Server.demoTelemetry
+// demoTelemetry streams the demo mission as signal patches ($_tm): a pure
+// query stream, no commands, no database. When the server stops (a deploy),
+// the last event asks the page to open it again from #telemetry.
+func (s *Server) demoTelemetry(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*") // public; used from the playground sandbox
+	if s.ctx.Err() != nil {
+		// Stopping: the page retries the 503 until the next process answers.
+		http.Error(w, "the server is restarting", http.StatusServiceUnavailable)
+		return
+	}
+	// Uncompressed: an event is 130 bytes, where an encoder would hold 430 KiB
+	// or more for as long as a page shows the telemetry.
+	stream, err := sse.Open(w, r, sse.Options{NoCompression: true})
+	if err != nil {
+		return
+	}
+	var last [][]byte
+	defer func() { stream.CloseWith(last...) }()
+	tick := time.NewTicker(250 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		tm, _ := json.Marshal(map[string]any{"_tm": TelemetryAt(time.Now())})
+		if err := stream.Write(sse.PatchSignals(tm, false)); err != nil {
+			return
+		}
+		select {
+		case <-tick.C:
+		case <-r.Context().Done():
+			return
+		case <-s.ctx.Done():
+			last = append(last, sse.Reconnect(ui.TelemetryID))
+			return
+		}
+	}
+}
+```
+
+## Styling
+
+Style it from your page's CSS, without changing the component or importing anything into it. Custom properties, inherited properties and `::part()` all reach into its shadow root.
+
+- **Size:** `--sb-gauge-size` (default `12rem`) sets the width. The dial keeps its proportions and the value and label scale with it (never below a readable size).
+- **Fonts:** the value and the label use your page's font. A site that sets a display font (`--sb-font-display`, like Starbase's pixel font) gets it for the value; set `--sb-font-display` on the gauge to choose the value's font on its own. The label is in capitals unless `--sb-display-case` is `none` (as with `data-sb-style="smooth"`).
+- **Colours:** the dial paints with theme tokens and repaints whenever one of them changes, whatever changed it: a theme switch, a theme scoped to a container, the system's light or dark mode, or your own override on the gauge. `--sb-ok`, `--sb-warn` and `--sb-danger` colour the zones, `--sb-border` the track, `--sb-text-1` the needle and the value, `--sb-brand` the hub, in any colour syntax, `light-dark()` included. The label is `--sb-text-2`.
+- **8-bit details:** the dial is an 80 × 44 pixel raster, scaled up with crisp pixels. At `--sb-notch: 0` (`data-sb-style="smooth"`) it is drawn smoothly at the screen's resolution instead, and it redraws when the token changes.
+- **Parts:** `value`, `label` and `dial` (the canvas), for anything the tokens don't cover. Your page's `::part()` rules win over the component's own, without `!important`.
+
+```html preview
+<style>
+  .my-gauge {
+    --sb-gauge-size: 14rem;
+    font-family: Georgia, serif;
+    --sb-font-display: Georgia, serif; /* only needed where a display font is set, like here */
+  }
+  .my-gauge::part(label) { text-transform: none; letter-spacing: 0; }
+</style>
+<sb-gauge class="my-gauge" value="64" label="Oxygen" unit="%"></sb-gauge>
+```
+
+A font you load yourself works inside the component too: load it in the page (a `<link>`, or an `@import` at the very top of your main stylesheet). A component's own styles are a constructed stylesheet, which can't `@import`.
+
 ## Accessibility
 
-The readout is a `role="meter"` with min, max and current value. The dial canvas is decorative. Under `prefers-reduced-motion` the needle jumps straight to the value.
+The readout is a `role="meter"` with min, max and current value. Like a native `<meter>`, the current value it reports stays within min and max; its text is the reading as shown, with the unit. The dial canvas is decorative. Under `prefers-reduced-motion` the needle jumps straight to the value.

@@ -37,6 +37,10 @@ components/my-widget/
 └── manifest.json   generated in dev from Rocket's manifest, commit it
 ```
 
+A component can also be written in TypeScript: rename `my-widget.js` to `my-widget.ts` and run `go tool task ts`. It type-checks the file strictly against the types of Datastar and Rocket and writes the compiled `my-widget.js` next to it, which you commit too: the site, the install snippets and the pinned versions all serve the JavaScript, and the TypeScript is what the playground opens. A test fails when the two drift apart. Pull requests only: the submission form takes JavaScript.
+
+The TypeScript can import other `.ts` modules from the component's folder (`import { clamp } from './lib/clamp.ts'`, compiled to a `.js` next to each), vendored JavaScript, and `.d.ts` files that declare its types (`vendor/chart.d.ts` next to `vendor/chart.js`). As for JavaScript components, nothing else: no npm packages and no `require()`; vendor a library into the folder instead.
+
 The front matter drives the gallery card:
 
 ```yaml
@@ -50,8 +54,14 @@ tags: [keywords, for, search]
 since: 2026-09-21
 preview: |
   <sb-my-widget></sb-my-widget>
+usage: |                   # optional
+  <sb-my-widget label="Volume"></sb-my-widget>
 ---
 ```
+
+`preview:` is the gallery card's live demo, so tune it to look good in a card. `usage:` is the smallest markup that shows how you'd use the component in your own page; the installation snippets use it, and fall back to `preview:`. Keep it free of card sizing, demo-only signals and state, and assets that only exist on Starbase.
+
+Components are MIT licensed. Code that comes from elsewhere under another licence names it with `license:` (an SPDX id the catalog knows, e.g. `Beerware`), and its page shows it.
 
 A fenced block tagged `html preview` renders twice: live on the page and as copyable source.
 
@@ -61,11 +71,18 @@ A fenced block tagged `html preview` renders twice: live on the page and as copy
 ```
 ````
 
-Your page automatically gets a **Playground** built from the manifest. Add a `playground:` block to the front matter to set slider ranges (`props`), starting `values`, slotted `content`, a `style` or static `attrs` for the live element (useful for arrays and JSON props, which get no control), or to `exclude` props.
+Server code in your docs can be a listing of Starbase's own handlers, so it never drifts from what the demo runs: name the file and the declarations (`Type.Method` for methods) after the language, leave the block empty, and run `go tool task listings` to fill it in. A test fails when a listing no longer matches its source.
+
+````markdown
+```go source=internal/web/demo.go#Server.demoTelemetry
+```
+````
+
+Your page automatically gets a **Playground** built from the manifest. Add a `playground:` block to the front matter to set slider ranges (`props`), starting `values`, slotted `content`, a `style` or static `attrs` for the live element (useful for arrays and JSON props, which get no control), or to `exclude` props. When the user can change a prop on the element itself (dragging `sb-voxel` turns it), `sync` names the event that reports it and the props in its detail, e.g. `sync: {sb-orbit: [yaw, pitch]}`, and the controls follow.
 
 ## House rules
 
-- **Shadow DOM and tokens.** Use Rocket's default `open` mode. Style only through `--sb-*` semantic tokens, each with a fallback: `--_bg: var(--sb-surface-card, #141D32)`. That makes the [Themes](/themes) page work, and the component still works outside Starbase. Pixel corners scale with `--sb-notch` (`--_notch: var(--sb-notch, 1)`; at `0`, fall back to a normal border radius), so people can opt out of the 8-bit look.
+- **Shadow DOM and tokens.** Use Rocket's default `open` mode. Style only through `--sb-*` semantic tokens, each with a fallback: `--_bg: var(--sb-surface-card, #141D32)`. That makes the [Themes](/themes) page work, and the component still works outside Starbase. Pixel corners scale with `--sb-notch` (`--_notch: var(--sb-notch, 1)`; at `0`, fall back to a normal border radius), so people can opt out of the 8-bit look. So do the other pixel details: a stepped shape's corners go from the staircase at 1 to a plain shape at 0 (`calc(smooth + (pixel - smooth) * var(--_notch))`), a stepped timing is `steps(calc(N + (1000 - N) * (1 - var(--_notch))))`, and a pixelated canvas draws at the screen's resolution at 0. Display text in capitals uses `text-transform: var(--sb-display-case, uppercase)`.
 - **State lives in `$$` signals, not attributes.** Datastar apps morph server HTML into the page. If your component writes interaction state back to its own attributes, the next morph resets it. Initialise `$$` from props, update `$$`, and expose live values with `overrideProp` getters.
 - **Speak Datastar.** Emit bubbling, composed events with `emit()`, so `data-on:*` works on any ancestor. Expose a `value` or `checked` property and fire `change` or `input`, so `data-bind` works. In your docs, declare bound signals with `data-signals` first, and bind components with `__prop`: `data-bind:_x__prop.value`. Datastar binds before custom elements are upgraded, and without `__prop` it falls back to the `value` *attribute*, which the next server morph removes. Host getters and setters that read or write `$$` must wrap the access in `startPeeking()`/`stopPeeking()`. Otherwise `data-bind`'s own effect subscribes to your internal signal and writes stale values back. Also adopt a `value` that `data-bind` set before your element was upgraded (see `early()` in the slider).
 - **Signal-driven attributes survive morphs only when preserved.** When a page drives a component with `data-attr:yaw="$_yaw"`, add `data-preserve-attr="yaw"` to the host. The server morph copies attributes from its own markup, and without this it would reset them on every frame.
@@ -90,7 +107,115 @@ Starbase is built on CQRS: a change is a command sent to the server, and the pag
 
 `datastar-fetch` reaches every listener, so the handler checks `evt.detail.el === el` first. The [Showcase](/showcase) has it running: a pending state, a server-normalized value and a rejected command.
 
+On the server, the handler reads the payload and sends a command, which answers 204, or 400 when the command is invalid:
+
+```go source=internal/web/commands.go#Server.cmdFlight,Server.send
+// cmdFlight is the Showcase's commands demo: one field per request, from a
+// component's sb-change ({name, value}). A short pause keeps the controls'
+// pending state visible.
+func (s *Server) cmdFlight(w http.ResponseWriter, r *http.Request) {
+	var p struct {
+		TabID string `json:"tabid"`
+		Name  string `json:"name"`
+		Value any    `json:"value"`
+	}
+	if err := datastar.ReadSignals(r, &p); err != nil {
+		http.Error(w, "bad payload", http.StatusBadRequest)
+		return
+	}
+	select {
+	case <-time.After(400 * time.Millisecond):
+	case <-r.Context().Done():
+		return
+	}
+	s.send(w, r, commands.SetFlight{SID: edge.SessionID(r.Context()), TabID: p.TabID, Name: p.Name, Value: fmt.Sprint(p.Value)})
+}
+
+// send enqueues a command and answers 204. The tab's render stream shows
+// the outcome; commands never return HTML.
+func (s *Server) send(w http.ResponseWriter, r *http.Request, cmd writer.Command) {
+	err := s.writer.Send(cmd)
+	switch {
+	case err == nil:
+		w.WriteHeader(http.StatusNoContent)
+	case errors.Is(err, writer.ErrInvalid):
+		http.Error(w, err.Error(), http.StatusBadRequest)
+	default:
+		s.log.Warn("command rejected", "err", err)
+		http.Error(w, "busy, try again", http.StatusServiceUnavailable)
+	}
+}
+```
+
+The command validates, then applies the change in the single writer's transaction. It touches its tab's topic, so only that tab's page renders again, and the page shows the stored value, normalized or not:
+
+```go source=internal/commands/flight.go#SetFlight,SetFlight.Validate,SetFlight.Apply
+// SetFlight sets one field of the Showcase's flight plan (the commands demo).
+// The server validates and normalizes; the page re-renders from the stored
+// plan, which is what confirms (or corrects) the control that sent it.
+type SetFlight struct {
+	SID, TabID  string
+	Name, Value string
+}
+
+func (c SetFlight) Validate() error {
+	if err := validTab(c.SID, c.TabID); err != nil {
+		return err
+	}
+	switch c.Name {
+	case "thrust":
+		n, err := strconv.Atoi(c.Value)
+		if err != nil || n < 0 || n > 100 {
+			return errors.New("thrust is 0 to 100")
+		}
+		if n > 90 {
+			return ErrThrust
+		}
+	case "shields":
+		if c.Value != "true" && c.Value != "false" {
+			return errors.New("shields are true or false")
+		}
+	case "callsign":
+		if !callsignRe.MatchString(strings.ToUpper(strings.TrimSpace(c.Value))) {
+			return errors.New("a call sign is 2 to 16 letters, digits or dashes")
+		}
+	default:
+		return errors.New("unknown field")
+	}
+	return nil
+}
+
+func (c SetFlight) Apply(tx *writer.Tx) error {
+	tx.Touch(TabTopic(c.TabID))
+	return updateTab(tx, c.SID, c.TabID, model.TabState{}, func(st *model.TabState) {
+		f := st.Flight.OrDefault()
+		switch c.Name {
+		case "thrust":
+			f.Thrust, _ = strconv.Atoi(c.Value)
+		case "shields":
+			f.Shields = c.Value == "true"
+		case "callsign":
+			f.Callsign = strings.ToUpper(strings.TrimSpace(c.Value)) // the server normalizes
+			f.CallsignRev++                                          // answered, even when nothing changed
+		}
+		st.Flight = f
+	})
+}
+```
+
+The Showcase uses Go with the [Datastar SDK](https://data-star.dev/reference/sdks); any SDK works the same way.
+
 **No optimistic updates.** Never show a result the server hasn't produced: counts, lists, derived values and success messages come only from its render. The user's own input stays as they left it, marked pending (`:state(pending)`, or a faded item for operations) until the server confirms it, and goes back with `revert()` if the command is rejected. This is the [Tao of Datastar](https://data-star.dev/guide/the_tao_of_datastar#optimistic-updates) applied to components.
+
+### Lists that hold the keyboard
+
+A component whose rows can be replaced by the server (a tree, a menu, a group of choices) has to defend the focus, or a morph throws the user out of it:
+
+- The morph (or `data-for`) can **park a row before removing it**, so `focusout` fires while the row is still connected and `relatedTarget` is `null`, exactly like a click on the page's text. Decide it **a moment later** (a microtask, or a frame): if the row is gone, the server dropped it, so keep your "focus is inside" flag and move the focus to its neighbour; if the row is still there, the user left, so clear the flag (and never pull the focus back). A switch to another window or tab isn't leaving (`document.hasFocus()` is false then).
+- Restore the DOM focus after a re-render only when it **fell on the floor**: `document.activeElement` is the body or the host. If the user moved on to something else, leave it there; a component that grabs focus back is worse than one that loses it.
+- When the focused row is **gone from the new list**, focus its neighbour (the old index, clamped into the new list, skipping disabled rows), not the first row: jumping to the top turns one arrow key into a trip to the other end of the list.
+
+`sb-tree`, `sb-radio-group`, `sb-dropdown` and `sb-virtual-scroll` all do this; copy from whichever is closest in shape. `sb-virtual-scroll` also restores the focus from an element the morph refilled with another item, and holds it on its scroller, not on a neighbour, while the item is only scrolled out of the window. It skips disabled elements inside an item, not disabled items: when the item at the old index has nothing to focus, the focus goes to the scroller.
 
 ### Components with several values
 

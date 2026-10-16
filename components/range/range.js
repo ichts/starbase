@@ -11,16 +11,19 @@ const peek = (fn) => {
 	}
 }
 
-// One ElementInternals per element: attachInternals() works once, and setup
+// The element's ElementInternals: attachInternals() works only once, and setup
 // runs again when the element is re-attached. Its custom states
 // (:state(pending)) are styleable from the page and morph-proof.
 const internals = new WeakMap()
 const internalsOf = (host) => internals.get(host) ?? internals.set(host, host.attachInternals()).get(host)
 
-// Pixel corners: notches every corner by p (2px times --sb-notch; at 0 the
-// border-radius takes over).
-const notch = (p) => `polygon(${p} 0, calc(100% - ${p}) 0, calc(100% - ${p}) ${p}, 100% ${p}, 100% calc(100% - ${p}), calc(100% - ${p}) calc(100% - ${p}), calc(100% - ${p}) 100%, ${p} 100%, ${p} calc(100% - ${p}), 0 calc(100% - ${p}), 0 ${p}, ${p} ${p})`
+// A detached range input puts a value in range and on the step grid exactly
+// as the thumbs do, in decimal arithmetic (0.7 / 0.1 is 6.999… in floats).
+const probe = document.createElement('input')
+probe.type = 'range'
 
+// The thumb, for WebKit and Gecko. Its focus ring (--_ring) is drawn inside:
+// the clip-path cuts off anything outside.
 const thumb = /* css */ `
 	pointer-events: auto;
 	inline-size: 14px;
@@ -28,9 +31,11 @@ const thumb = /* css */ `
 	border: 0;
 	background: var(--_thumb);
 	box-shadow: inset 0 -3px 0 var(--_thumb-edge);
-	clip-path: ${notch('var(--_n)')};
+	clip-path: var(--_clip);
 	border-radius: calc(7px * (1 - var(--_notch)));
 	cursor: grab;
+	outline: var(--_ring, 0);
+	outline-offset: -3px;
 `
 
 const styles = /* css */ `
@@ -38,39 +43,43 @@ const styles = /* css */ `
 	--_track: var(--sb-surface-inset, #0B1224);
 	--_border: var(--sb-border, #283552);
 	--_fill: var(--sb-brand, #8C6BFF);
-	--_thumb: var(--sb-text-1, #F3F4FA);
-	--_thumb-edge: var(--sb-brand-light, #B09AFF);
+	--_thumb: var(--sb-slider-thumb, var(--sb-text-1, #F3F4FA));
+	--_thumb-edge: var(--sb-slider-thumb-edge, var(--sb-brand-light, #B09AFF));
 	--_label: var(--sb-text-2, #AEBBDD);
 	--_muted: var(--sb-text-muted, #7785A8);
 	--_value: var(--sb-text-1, #F3F4FA);
 	--_notch: var(--sb-notch, 1);
 	--_n: calc(2px * var(--_notch));
+	/* Pixel corners for the track and the thumbs: every corner notched by
+	   --_n (at --sb-notch: 0 their border-radius takes over). */
+	--_clip: polygon(var(--_n) 0, calc(100% - var(--_n)) 0, calc(100% - var(--_n)) var(--_n), 100% var(--_n), 100% calc(100% - var(--_n)), calc(100% - var(--_n)) calc(100% - var(--_n)), calc(100% - var(--_n)) 100%, var(--_n) 100%, var(--_n) calc(100% - var(--_n)), 0 calc(100% - var(--_n)), 0 var(--_n), var(--_n) var(--_n));
 	display: block;
 	inline-size: 100%;
 	min-inline-size: 8rem;
 }
+:host([hidden]) { display: none; }
 :host([disabled]) { opacity: 0.5; pointer-events: none; }
 .field { display: grid; gap: 0.5rem; }
 .head { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; font-size: 0.8125rem; }
 .label { color: var(--_label); font-weight: 600; }
-output { color: var(--_value); font-variant-numeric: tabular-nums; font-weight: 700; }
+.value { color: var(--_value); font-variant-numeric: tabular-nums; font-weight: 700; }
 /* Two native range inputs on one rail: only their thumbs take the pointer.
    The fill runs between the thumbs' centres (--_a, --_b are 0..1), which
-   sit 7px (half a thumb) inside the ends. */
+   sit 7px (half a thumb) inside the ends; a stop at 0 starts where the one
+   before it ends. */
 .rail { position: relative; block-size: 20px; }
 .rail::before {
-	--_x: calc(7px + (100% - 14px) * var(--_a));
-	--_y: calc(7px + (100% - 14px) * var(--_b));
 	content: "";
 	position: absolute;
 	inset-inline: 0;
 	inset-block-start: 6px;
 	block-size: 8px;
-	background: linear-gradient(to right, var(--_track) var(--_x), var(--_fill) var(--_x), var(--_fill) var(--_y), var(--_track) var(--_y));
+	background: linear-gradient(to right, var(--_track) calc(7px + (100% - 14px) * var(--_a)), var(--_fill) 0 calc(7px + (100% - 14px) * var(--_b)), var(--_track) 0);
 	box-shadow: 0 0 0 2px var(--_border);
-	clip-path: ${notch('var(--_n)')};
+	clip-path: var(--_clip);
 	border-radius: calc(4px * (1 - var(--_notch)));
 }
+.rail:dir(rtl)::before { scale: -1 1; }
 input {
 	position: absolute;
 	inset: 0;
@@ -89,18 +98,14 @@ input::-moz-range-track { background: transparent; }
 input::-webkit-slider-thumb { appearance: none; ${thumb} transition: translate 80ms; }
 input::-moz-range-thumb { ${thumb} }
 input:active::-webkit-slider-thumb { translate: 0 1px; cursor: grabbing; }
-input:focus-visible { outline: none; }
-input:focus-visible::-webkit-slider-thumb { outline: 2px solid var(--_thumb-edge); outline-offset: 2px; }
-input:focus-visible::-moz-range-thumb { outline: 2px solid var(--_thumb-edge); outline-offset: 2px; }
+input:focus-visible { outline: none; --_ring: 3px solid var(--_thumb-edge); }
 .ticks { display: flex; justify-content: space-between; color: var(--_muted); font-size: 0.6875rem; font-variant-numeric: tabular-nums; }
 `
 
 rocket('sb-range', {
-	props: ({ bool, number, object, string }) => ({
-		// A missing start or end means the whole range (the codec defaults are
-		// clamped to min and max).
-		value: object({ start: number.default(-Infinity), end: number.default(Infinity) }).docs({
-			description: 'The range, as JSON: {"start": 20, "end": 60}; a missing part is min or max. A new value from the server replaces it; the live value is the value property.',
+	props: ({ bool, json, number, string }) => ({
+		value: json.docs({
+			description: 'The range, as JSON: {"start": 20, "end": 60}; a missing or null part is min or max. A new value from the server replaces it; the live value is the value property.',
 		}),
 		min: number.docs({ description: 'Minimum.' }),
 		max: number.default(100).docs({ description: 'Maximum.' }),
@@ -111,7 +116,7 @@ rocket('sb-range', {
 		ticks: bool.docs({ description: 'Show min and max below the track.' }),
 		disabled: bool.docs({ description: 'Disable interaction.' }),
 		confirm: bool.docs({ description: 'Server-confirmed value: :state(pending) while the local range differs from the server\'s value attribute (see revert()).' }),
-		name: string.trim.docs({ description: 'Name reported in sb-change (e.g. the field of a command).' }),
+		name: string.trim.docs({ description: 'Name reported in sb-change (e.g. the field of a command) and submitted with a <form>.' }),
 	}),
 	manifest: {
 		events: [
@@ -120,9 +125,15 @@ rocket('sb-range', {
 			{ name: 'sb-change', kind: 'custom-event', bubbles: true, composed: true, description: 'When the range is committed. detail: { name, value: { start, end } }: the whole range, one command.' },
 		],
 	},
-	setup: ({ $$, action, adoptStyles, defineHostProp, effect, emit, host, observeProps, overrideProp, props }) => {
+	setup: ({ $$, action, adoptStyles, cleanup, defineHostProp, effect, emit, host, observeProps, overrideProp, props }) => {
 		adoptStyles(host, styles)
-		const clamp = (v) => Math.min(props.max, Math.max(props.min, Number.isNaN(v) ? props.min : v))
+		// Decimals of the step grid (step and min); continuous shows two.
+		const dec = (n) => (String(n).split('.')[1] || '').length
+		const places = () => (props.step ? Math.max(dec(props.step), dec(props.min)) : 2)
+		// In bounds and on the step grid, like the thumbs (whose last stop can
+		// be below max). ±Infinity (a missing part) and NaN become a bound first:
+		// the probe would take them as its middle.
+		const clamp = (v, { min, max, step } = props) => (Object.assign(probe, { min, max, step: step || 'any', value: isFinite(v) ? v : v > 0 ? max : min }), +probe.value)
 		// A range in order and in bounds; accepts {start, end} or [start, end].
 		const norm = (v) => {
 			const [a, b] = Array.isArray(v) ? v : [v?.start, v?.end]
@@ -130,40 +141,85 @@ rocket('sb-range', {
 			const e = clamp(Number(b ?? Infinity))
 			return s <= e ? { start: s, end: e } : { start: e, end: s }
 		}
+		const cur = () => peek(() => ({ start: $$.start, end: $$.end }))
 		const set = (v) => peek(() => ({ start: $$.start, end: $$.end } = norm(v)))
 		set(props.value)
 		// The server's value attribute wins when it changes; a removed attribute
-		// changes nothing (morphs also strip reflected ones). New bounds re-clamp.
-		observeProps((p, changes) => set('value' in changes && host.hasAttribute('value') ? p.value : peek(() => ({ start: $$.start, end: $$.end }))), 'value', 'min', 'max')
-		overrideProp('value', () => peek(() => ({ start: $$.start, end: $$.end })), set)
+		// changes nothing (morphs also strip reflected ones). New bounds or step
+		// re-clamp a local edit, and re-apply the server's range otherwise: a
+		// morph sets attributes one by one, so the value can come before its
+		// bounds. (Only for these props, not merged with sync's observer: inside
+		// a Datastar batch, e.g. el.value = …; el.unit = … in one handler, mine
+		// is still stale, and the server's range would replace the edit.)
+		let mine
+		observeProps((p, changes) => set(host.hasAttribute('value') && ('value' in changes || !mine) ? p.value : cur()), 'value', 'min', 'max', 'step')
+		overrideProp('value', cur, set)
 		// Commands: the attribute is the server's range, $$ the local one. Both
 		// ends are one value: pending while either differs, revert() restores both.
 		const states = internalsOf(host).states
+		// Also keeps the shown texts current: props (unit, step) aren't signals.
 		const sync = () =>
 			peek(() => {
 				const s = norm(props.value)
-				props.confirm && (s.start !== $$.start || s.end !== $$.end) ? states.add('pending') : states.delete('pending')
+				const fmt = (n) => n.toFixed(places()) + props.unit
+				mine = s.start !== $$.start || s.end !== $$.end
+				states[props.confirm && mine ? 'add' : 'delete']('pending')
+				const a = ($$.startText = fmt($$.start))
+				const b = ($$.endText = fmt($$.end))
+				$$.shown = a === b ? a : `${a} – ${b}`
 			})
-		effect(() => ($$.start, $$.end, sync()))
+		// (No start: the element is being removed and its signals are gone;
+		// writing the texts would bring them back.)
+		effect(() => $$.start != null && ($$.end, sync()))
 		observeProps(sync)
-		defineHostProp('revert', { value: () => (set(props.value), sync()) })
-		const decimals = () => (String(props.step).split('.')[1] || '').length
-		const fmt = (n) => Number(n).toFixed(decimals()) + props.unit
-		$$.startText = () => fmt($$.start)
-		$$.endText = () => fmt($$.end)
-		$$.shown = () => ($$.start === $$.end ? $$.startText : `${$$.startText} – ${$$.endText}`)
+		const revert = () => set(props.value)
+		defineHostProp('revert', { value: revert })
+		// Forms: until Rocket can make this element form-associated, join the
+		// submissions and resets of the form it sits in. `formdata` also fires for
+		// new FormData(form), so Datastar's contentType: 'form' posts include it.
+		// Both are heard on the root (document or shadow root), once every
+		// listener on the form has run: a reset the page cancelled (whenever its
+		// listener was added) leaves the value, as it leaves native fields, and a
+		// form nested in this one by a script, whose events bubble through it,
+		// isn't taken for it. setup reruns on a re-attach, so a move follows.
+		// The entry is the local range in the value attribute's JSON; a reset is
+		// revert(): the server's range, no change events.
+		const form = host.closest('form')
+		const root = host.getRootNode()
+		const onData = (evt) => evt.target === form && peek(() => props.name && !props.disabled && evt.formData.append(props.name, JSON.stringify(cur())))
+		const onReset = (evt) => evt.target === form && !evt.defaultPrevented && revert()
+		root.addEventListener('formdata', onData)
+		root.addEventListener('reset', onReset)
+		cleanup(() => (root.removeEventListener('formdata', onData), root.removeEventListener('reset', onReset)))
+		// Both inputs report here. A pointer that grabs the thumbs where they
+		// meet ($$tie) picks the part with its first move: down moves the start,
+		// up the end. When that is the other input's part, the inputs swap what
+		// they show ($$swap) until the commit, so the dragged thumb shows it.
+		// Such a drag can end where it began, without a change event, so
+		// pointerup (and pointercancel) commit too. A commit only emits if the
+		// range differs from the one before the drag or key press: a thumb
+		// stopped by the other one still fires change.
+		$$.swap = false // before the render, so the inputs' effects follow it
+		let from
+		action('slide', ({ evt: { target: t } }) =>
+			peek(() => {
+				const v = +t.value
+				from ??= cur()
+				if ($$.tie === true) $$.tie = v < $$.start ? 'start' : 'end'
+				const k = $$.tie || t.name
+				$$[k] = k === 'end' ? Math.max(v, $$.start) : Math.min(v, $$.end)
+				$$.swap = k !== t.name
+				t.value = $$[k]
+			}),
+		)
 		action('commit', () => {
-			emit('change')
-			emit('sb-change', { name: props.name, value: { start: $$.start, end: $$.end } })
-		})
-	},
-	// The fill between the thumbs follows the range through custom properties.
-	onFirstRender: ({ $$, effect, host, props }) => {
-		const rail = host.shadowRoot.querySelector('.rail')
-		const at = (v) => String((v - props.min) / (props.max - props.min || 1))
-		effect(() => {
-			rail.style.setProperty('--_a', at($$.start))
-			rail.style.setProperty('--_b', at($$.end))
+			const v = cur()
+			if (from && (from.start !== v.start || from.end !== v.end)) {
+				emit('change')
+				emit('sb-change', { name: props.name, value: v })
+			}
+			from = $$.tie = null
+			$$.swap = false
 		})
 	},
 	render: ({ html, props: { min, max, step, label, showValue, ticks, disabled, unit } }) => html`
@@ -171,35 +227,43 @@ rocket('sb-range', {
 			${label || showValue ? html`
 				<span class="head">
 					<span class="label" part="label">${label}</span>
-					${showValue ? html`<output part="value" data-text="$$shown"></output>` : null}
+					${showValue ? html`<span class="value" part="value" data-text="$$shown"></span>` : null}
 				</span>` : null}
-			<span class="rail" part="rail">
+			<span
+				class="rail"
+				part="rail"
+				data-style:--_a="($$start - ${min}) / ${max - min || 1}"
+				data-style:--_b="($$end - ${min}) / ${max - min || 1}"
+				data-on:pointerdown="$$tie = $$start == $$end"
+				data-on:pointerup="@commit()"
+				data-on:pointercancel="@commit()"
+				data-on:input="@slide()"
+				data-on:change="@commit()"
+			>
 				<input
 					type="range"
+					name="start"
 					part="input start"
 					min="${min}"
 					max="${max}"
 					step="${step || 'any'}"
-					aria-label="${(label || 'Range') + ' start'}"
+					aria-label="${label || 'Range'} start"
 					disabled="${disabled}"
 					data-class:top="$$start >= ${(min + max) / 2}"
 					data-attr:aria-valuetext="$$startText"
-					data-effect="el.value != $$start && (el.value = $$start)"
-					data-on:input="$$start = Math.min(+el.value, $$end); el.value = $$start"
-					data-on:change="@commit()"
+					data-effect="${min}, ${max}, ${step}, el.value = $$swap ? $$end : $$start"
 				/>
 				<input
 					type="range"
+					name="end"
 					part="input end"
 					min="${min}"
 					max="${max}"
 					step="${step || 'any'}"
-					aria-label="${(label || 'Range') + ' end'}"
+					aria-label="${label || 'Range'} end"
 					disabled="${disabled}"
 					data-attr:aria-valuetext="$$endText"
-					data-effect="el.value != $$end && (el.value = $$end)"
-					data-on:input="$$end = Math.max(+el.value, $$start); el.value = $$end"
-					data-on:change="@commit()"
+					data-effect="${min}, ${max}, ${step}, el.value = $$swap ? $$start : $$end"
 				/>
 			</span>
 			${ticks ? html`<span class="ticks" aria-hidden="true"><span>${min}${unit}</span><span>${max}${unit}</span></span>` : null}

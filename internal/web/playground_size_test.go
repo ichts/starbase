@@ -1,0 +1,60 @@
+package web_test
+
+import (
+	"io"
+	"io/fs"
+	"path"
+	"strconv"
+	"strings"
+	"testing"
+
+	"starbase/internal/ui"
+)
+
+// The playground's size line measures like the catalog: a component's own
+// source, bundled with the files of its folder, gets the numbers of its
+// size table, also when it is written in TypeScript (dropdown): raw is then
+// the TypeScript as written.
+func TestPlaygroundSize(t *testing.T) {
+	ts, c, _, cat := newServerWriter(t)
+	measure := func(slug, name, code string) string {
+		t.Helper()
+		body := `{"component":` + strconv.Quote(slug) + `,"name":` + strconv.Quote(name) + `,"code":` + strconv.Quote(code) + `}`
+		res := post(t, c, ts.URL+"/playground/size", body, "same-origin")
+		b, _ := io.ReadAll(res.Body)
+		if res.StatusCode != 200 {
+			t.Fatalf("%s: %d %s", slug, res.StatusCode, b)
+		}
+		return string(b)
+	}
+	// dropdown renders <sb-dropdown> itself (submenus): its own tag is not a dependency.
+	for _, slug := range []string{"code-editor", "code-playground", "button", "dropdown"} {
+		comp, _ := cat.Get(slug)
+		src, _ := fs.ReadFile(cat.FS, comp.SourceFile)
+		got := measure(slug, "component"+path.Ext(comp.SourceFile), string(src))
+		want := []string{`"own":"` + ui.FmtBytes(comp.Sizes.Bundle.Min) + `"`, `"raw":"` + ui.FmtBytes(len(src)) + `"`}
+		if comp.Sizes.Total.Min != comp.Sizes.Bundle.Min {
+			want = append(want, `"total":"`+ui.FmtBytes(comp.Sizes.Total.Min)+`"`)
+		} else {
+			want = append(want, `"total":""`)
+		}
+		for _, w := range want {
+			if !strings.Contains(got, w) {
+				t.Errorf("%s: want %s in\n%s", slug, w, got)
+			}
+		}
+	}
+	// Code that doesn't parse only marks the last numbers stale.
+	if got := measure("", "", "rocket('sb-x', {"); !strings.Contains(got, `"stale":true`) || strings.Contains(got, `"own"`) {
+		t.Errorf("unparseable code:\n%s", got)
+	}
+	if res := post(t, c, ts.URL+"/playground/size", `{"code":"1"}`, "cross-site"); res.StatusCode != 403 {
+		t.Errorf("cross-site: %d", res.StatusCode)
+	}
+	// The page renders the first numbers into the playground's bar.
+	button, _ := cat.Get("button")
+	_, page := get(t, c, ts.URL+"/playground?component=button")
+	if !strings.Contains(page, `slot="bar" class="pg-size"`) || !strings.Contains(page, ">"+ui.FmtBytes(button.Sizes.Bundle.Min)+"</strong>") {
+		t.Error("the playground page lacks the size line with the first numbers")
+	}
+}

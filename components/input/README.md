@@ -11,6 +11,7 @@ preview: |
 playground:
   values: {placeholder: "Your message...", action: true}
   props: {minlength: {min: 0, max: 20}}
+  exclude: [rev]
 ---
 
 A text field with a label, help text, native constraint validation and an optional submit arrow. It exposes a live `value` property, so `data-bind` works as it does on a native `<input>`.
@@ -25,7 +26,7 @@ A text field with a label, help text, native constraint validation and an option
 
 ### Validation
 
-Validation runs after the first blur and then on every keystroke. `required`, `minlength`, `pattern` and `type` use the browser's own rules. Set `error` to replace the default message.
+Validation starts once a value is committed (Enter, or leaving a changed field) or submitted, and then runs on every keystroke and on every new value, like the browser's `:user-invalid`. `required`, `minlength`, `pattern` and `type` use the browser's own rules. Set `error` to replace the default message.
 
 ```html preview
 <sb-input label="Email" type="email" required placeholder="you@starbase.dev"></sb-input>
@@ -45,7 +46,7 @@ Declare the signal first, because `data-bind` only writes to a signal that alrea
 
 ### Submit with the arrow
 
-`sb-submit` fires on Enter or on the arrow button, but only when the value is valid. Send it to your backend with `@post`.
+`sb-submit` fires on Enter or on the arrow button, but only when the value is valid. Send it to your backend with `@post`. (Enter also commits the value, so `sb-change` follows.)
 
 ```html preview
 <div data-signals:_log="''">
@@ -56,8 +57,44 @@ Declare the signal first, because `data-bind` only writes to a signal that alrea
 
 ## With commands
 
-Give it a `name`, and it emits `sb-change` with `{ name, value }` when a value is committed: ready to post as a command. With `confirm`, it sets `:state(pending)` until the server's re-rendered attribute matches, and `revert()` goes back to the server's value when a command is rejected. See [Commands and components](/contribute#commands-and-components) and the [Showcase](/showcase).
+Give it a `name`, and it emits `sb-change` with `{ name, value }` when a value is committed (Enter, or leaving a changed field): ready to post as a command. The `value` attribute is the server's value: a new one replaces what the user typed, and re-sent identical markup leaves an edit alone. To clear the field, the server sends `value=""`.
+
+With `confirm`, it sets `:state(pending)` while the local value differs from the server's, and `revert()` goes back to the server's value when a command is rejected:
+
+```html
+<sb-input name="callsign" label="Call sign" confirm value="STARBASE-1" rev="7"
+  data-on:sb-change="@post('/cmd/flight', {payload: evt.detail})"
+  data-on:datastar-fetch="evt.detail.el === el && evt.detail.type === 'error' && el.revert()"></sb-input>
+```
+
+A server that answers with the value it already had (it upper-cased `starbase-1` back to `STARBASE-1`, or ignored a no-op) sends identical markup, so the edit would stay pending. Render `rev`, a revision that changes with every applied command for this field (a counter will do): a new `rev` means the server has answered, and its value wins even when it is unchanged. The same clears a chat-style field after its message was sent: `value=""` with a new `rev`.
+
+[Commands and components](/contribute#commands-and-components) lists the handler and the command behind this call sign, and the [Showcase](/showcase) runs it.
+
+## Forms
+
+Inside a `<form>`, `sb-input` submits its value under its `name` (`name=…`, also when it is empty), `new FormData(form)` and Datastar's `contentType: 'form'` include it, and a form reset brings back the server's value and clears the error, without firing `input`, `change` or `sb-change`. A `disabled` field is left out, like a native one.
+
+It is not a form-associated element yet (Rocket can't declare one), so the form's own validation (`checkValidity()`, `:invalid`) doesn't see `required`, `minlength` or `pattern`, Enter emits `sb-submit` instead of submitting the form, and `<fieldset disabled>`, `<label for>` and the `form` attribute don't reach it. With commands, `sb-change` carries `{ name, value }` (see [With commands](#with-commands)).
+
+## Styling
+
+Style it from your page's CSS, without changing the component or importing anything into it. Custom properties, inherited properties and `::part()` all reach into its shadow root.
+
+- **Size:** it fills the width it is given, up to `26rem`; set `max-inline-size` on the element to change that. The field is `2.75rem` tall: set `block-size` on `::part(input)` (and `::part(button)`, with `action`).
+- **Fonts:** the label, the text you type and the hint use your page's font.
+- **Colours:** the field is `--sb-control-bg` with a `--sb-control-border` edge (`--sb-control-border-hover` on hover) and `--sb-control-text`; the placeholder and the hint are `--sb-control-placeholder`, the label `--sb-text-2`. Focus draws a `--sb-brand-light` edge with a `--sb-brand-subtle` glow, and errors are `--sb-danger`. The submit button has a `--sb-brand-light` edge on `--sb-brand-subtle`, and is `--sb-brand` with a `--sb-text-on-brand` arrow on hover. Corners are `--sb-control-radius`.
+- **Parts:** `label`, `input` and `button` (the submit arrow, with `action`). Your page's `::part()` rules win over the component's own, without `!important`.
+
+```html preview
+<style>
+  .my-input { max-inline-size: 18rem; --sb-control-radius: 0; }
+  .my-input::part(input) { block-size: 2.25rem; font-size: 0.875rem; }
+  .my-input::part(label) { text-transform: uppercase; letter-spacing: 0.08em; }
+</style>
+<sb-input class="my-input" label="Call sign" placeholder="e.g. Maverick"></sb-input>
+```
 
 ## Accessibility
 
-The native `<input>` sits inside a `<label>`. Without a `label`, the placeholder becomes the accessible name. Errors are announced with `role="alert"`, and `aria-invalid` follows the validation state.
+`label` is a `<label>` for the native `<input>`; without one, the element's `aria-label` or the placeholder names it. The hint and the error describe it (`aria-describedby`). The error is a polite live region, announced after what the screen reader is saying, and `aria-invalid` follows the validation state. `disabled` disables the native input (and the arrow), which takes it out of the tab order. Right to left, the submit arrow points the other way. In forced colors, focus shows as an outline.

@@ -46,12 +46,24 @@ templ Document(s Shell, body templ.Component) {
 			<link rel="stylesheet" href={ s.Assets.SiteCSS() }/>
 			@templ.Raw(`<script type="importmap" nonce="` + s.Nonce + `">` + importMap(s.Assets) + `</script>`)
 			<script type="module" src={ s.Assets.Datastar() }></script>
-			<script type="module" src={ s.Assets.Components() }></script>
 			if s.Dev && len(s.ManifestTags) > 0 {
+				// Dev pages publish the manifests, from the readable modules: the
+				// bundle and the .min files leave out the .docs() and manifest:
+				// blocks (catalog/shrink.go), and a component defined from both would
+				// depend on which rocket() call came last. Every module, not just the
+				// page's: the publisher waits for every tag, and an unlisted component
+				// (sb-code-playground) never appears on a page.
+				<script type="module" src={ s.Assets.AllComponents() }></script>
 				@templ.Raw(manifestScript(s))
+			} else if s.LoadBundle {
+				<script type="module" src={ s.Assets.Bundle() }></script>
+			} else {
+				<script type="module" src={ s.Assets.Components() }></script>
 			}
 		</head>
-		<body data-signals={ s.Signals } data-init={ streamInit }>
+		<body data-signals={ s.Signals }>
+			<div id={ StreamID } hidden data-init={ streamInit } data-on:datastar-fetch={ streamRetrying }></div>
+			<div hidden data-signals="{_ping: 0, _seen: 0, _quiet: 0}" { templ.Attributes{watchdogInterval(s.Heartbeat): watchdogTick}... }></div>
 			@App(s, body)
 		</body>
 	</html>
@@ -176,9 +188,10 @@ templ Footer(s Shell) {
 			<span class="made-with">
 				Built with Go, templ, SQLite and
 				<a href="https://data-star.dev">Datastar</a>.
+				Maintained by <a href="https://zweiundeins.gmbh">zwei und eins gmbh</a>.
 			</span>
 			<span>
-				Components are MIT licensed by their authors ·
+				Components are MIT licensed unless their page names another licence ·
 				<a href={ safe(s.RepoURL) }>Source</a> ·
 				<a href={ safe(s.RepoURL + "/blob/main/CHANGELOG.md") }>{ s.Version }</a>
 			</span>

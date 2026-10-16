@@ -1,5 +1,10 @@
 import { rocket } from 'datastar'
 
+// The custom states of each element's ElementInternals: attachInternals() works
+// once, and setup runs again when the element is re-attached. :state(closed) is
+// styleable from the page, morph-proof, and survives a move.
+const statesOf = new WeakMap()
+
 const styles = /* css */ `
 :host {
 	--_bg: var(--sb-surface-inset, #0B1224);
@@ -9,7 +14,11 @@ const styles = /* css */ `
 	--_radius: var(--sb-radius, 8px);
 	display: block;
 }
+:host([hidden]) { display: none; }
+/* No gap left in a stack; !important beats a page's display rule. */
+:host(:state(closed)) { display: none !important; }
 .alert {
+	/* info's tone; the other variants set theirs below. */
 	--_tone: var(--sb-info, #65BFFF);
 	display: grid;
 	grid-template-columns: auto 1fr auto;
@@ -20,22 +29,27 @@ const styles = /* css */ `
 	border-radius: var(--_radius);
 	background: linear-gradient(color-mix(in oklch, var(--_tone) 7%, transparent), transparent), var(--_bg);
 	color: var(--_muted);
+	/* Long URLs wrap instead of pushing the close button out. */
+	overflow-wrap: anywhere;
 	animation: in 180ms cubic-bezier(0.2, 0, 0, 1);
 }
 .success { --_tone: var(--sb-ok, #6EF59A); }
-.info { --_tone: var(--sb-info, #65BFFF); }
 .warning { --_tone: var(--sb-warn, #F5C451); }
 .danger { --_tone: var(--sb-danger, #F2777A); }
-/* A pixel "status light". */
+/* A pixel "status light": corners notched by --sb-notch, a dot at 0. */
 .light {
+	--_n: calc(3px * var(--sb-notch, 1));
+	--_m: calc(12px - var(--_n));
 	inline-size: 12px;
 	block-size: 12px;
 	margin-block-start: 0.3em;
+	border-radius: calc(6px - 2 * var(--_n));
 	background: var(--_tone);
-	clip-path: polygon(3px 0, 9px 0, 9px 3px, 12px 3px, 12px 9px, 9px 9px, 9px 12px, 3px 12px, 3px 9px, 0 9px, 0 3px, 3px 3px);
-	box-shadow: 0 0 12px var(--_tone);
+	clip-path: polygon(var(--_n) 0, var(--_m) 0, var(--_m) var(--_n), 12px var(--_n), 12px var(--_m), var(--_m) var(--_m), var(--_m) 12px, var(--_n) 12px, var(--_n) var(--_m), 0 var(--_m), 0 var(--_n), var(--_n) var(--_n));
 }
-.heading { display: block; color: var(--_tone); font-weight: 700; }
+/* Tones are fills, too light for text on light schemes: mixed toward the text
+   in oklab, which keeps the hue (oklch rotates it). */
+.heading { display: block; color: light-dark(color-mix(in oklab, var(--_tone) 70%, var(--_text)), var(--_tone)); font-weight: 700; }
 .heading + .msg { margin-block-start: 0.15rem; }
 .msg { font-size: 0.875rem; }
 .close {
@@ -44,7 +58,8 @@ const styles = /* css */ `
 	place-items: center;
 	inline-size: 1.75rem;
 	block-size: 1.75rem;
-	margin: -0.25rem -0.375rem 0 0;
+	margin-block-start: -0.25rem;
+	margin-inline-end: -0.375rem;
 	border-radius: 4px;
 	color: var(--_muted);
 	cursor: pointer;
@@ -54,43 +69,61 @@ const styles = /* css */ `
 .close svg { inline-size: 1rem; block-size: 1rem; }
 @keyframes in { from { opacity: 0; translate: 0 -4px; } }
 @media (prefers-reduced-motion: reduce) { .alert { animation: none; } }
+@media (forced-colors: active) { .light { forced-color-adjust: none; background: CanvasText; } }
 `
 
 rocket('sb-alert', {
 	props: ({ bool, oneOf, string }) => ({
-		variant: oneOf('info', 'success', 'warning', 'danger').default('info').docs({ description: 'Tone of the message.' }),
+		// oneOf defaults to its first value, info.
+		variant: oneOf('info', 'success', 'warning', 'danger').docs({ description: 'Tone of the message.' }),
 		heading: string.trim.docs({ description: 'Bold first line.' }),
 		closable: bool.docs({ description: 'Show a dismiss button.' }),
-		open: bool.default(true).docs({ description: 'Shown. The server can hide or re-show it by changing the attribute (open="false").' }),
+		open: bool.default(true).docs({
+			description: 'Shown. Any change the server makes to the attribute wins, over a dismissal too: open="false" hides it, open or no attribute shows it. Unchanged markup keeps a dismissal. From script: host.open, show(), hide().',
+		}),
 	}),
 	manifest: {
-		slots: [{ name: 'default', description: 'The message.' }],
-		events: [{ name: 'sb-close', kind: 'custom-event', bubbles: true, composed: true, description: 'After the alert was dismissed.' }],
+		slots: [
+			{ name: 'default', description: 'The message.' },
+			{ name: 'icon', description: 'Replaces the status light, e.g. with an icon per variant. Mark it aria-hidden="true" when the text names the severity.' },
+		],
+		events: [{ name: 'sb-close', kind: 'event', bubbles: true, composed: true, description: 'The user pressed the close button (not sent for hide(), host.open or the server). No detail.' }],
 	},
-	setup: ({ $$, action, adoptStyles, defineHostProp, emit, host, observeProps, props }) => {
+	setup: ({ action, adoptStyles, defineHostProp, emit, host, overrideProp, props }) => {
 		adoptStyles(host, styles)
-		$$.open = props.open
-		observeProps(() => ($$.open = props.open), 'open')
+		let states = statesOf.get(host)
+		const set = (open) => void states[open ? 'delete' : 'add']('closed')
+		if (!states) {
+			statesOf.set(host, (states = host.attachInternals().states))
+			set(props.open)
+			// The attribute is the server's word, so every change to it wins, over
+			// a dismissal too (observeProps only fires when the decoded value
+			// changes, and absent, "" and "true" all decode to true). A morph
+			// writes only what differs, so markup sent again unchanged keeps a
+			// dismissal. Unlike sb-details, a removed attribute counts: it means
+			// the default, open (the Playground's switch shows it that way).
+			// Observes for the element's lifetime, while moved or detached too.
+			let served = host.getAttribute('open')
+			new MutationObserver(() => served !== (served = host.getAttribute('open')) && set(props.open)).observe(host, { attributeFilter: ['open'] })
+		}
+		// Local: never reflected, so a morph can't undo it.
+		overrideProp('open', () => !states.has('closed'), set)
+		defineHostProp('show', { value: () => set(true) })
+		defineHostProp('hide', { value: () => set(false) })
 		action('close', () => {
-			$$.open = false
+			set(false)
 			emit('sb-close')
 		})
-		defineHostProp('show', { value: () => ($$.open = true) })
-		defineHostProp('hide', { value: () => ($$.open = false) })
 	},
+	// The close icon's paths are bare lines, so there is nothing to fill.
 	render: ({ html, props: { variant, heading, closable } }) => html`
-		<div
-			class="alert ${variant}"
-			part="alert"
-			role="${variant === 'danger' || variant === 'warning' ? 'alert' : 'status'}"
-			data-show="$$open"
-		>
-			<span class="light" aria-hidden="true"></span>
+		<div class="alert ${variant}" part="alert" role="${variant === 'danger' || variant === 'warning' ? 'alert' : 'status'}">
+			<slot name="icon"><span class="light" aria-hidden="true"></span></slot>
 			<div>
-				${heading ? html`<strong class="heading">${heading}</strong>` : null}
-				<div class="msg"><slot></slot></div>
+				${heading ? html`<strong class="heading" part="heading">${heading}</strong>` : null}
+				<div class="msg" part="message"><slot></slot></div>
 			</div>
-			${closable ? html`<button class="close" type="button" aria-label="Dismiss" data-on:click="@close()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>` : null}
+			${closable ? html`<button class="close" type="button" aria-label="Dismiss" data-on:click="@close()"><svg viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>` : null}
 		</div>
 	`,
 })

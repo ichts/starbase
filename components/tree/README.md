@@ -7,7 +7,9 @@ author: zweiundeins
 tags: [tree, hierarchy, lazy, navigation, file browser]
 since: 2026-09-22
 preview: |
-  <sb-tree style="inline-size: 13rem" value="earth" items='[{"id":"sol","label":"Sol","icon":"☀️","children":[{"id":"venus","label":"Venus","icon":"🟠"},{"id":"earth","label":"Earth","icon":"🌍","children":[{"id":"moon","label":"Moon","icon":"🌕"}]},{"id":"mars","label":"Mars","icon":"🔴"}]}]'></sb-tree>
+  <sb-tree style="inline-size: 13rem" value="earth" expanded="sol" items='[{"id":"sol","label":"Sol","icon":"☀️","children":[{"id":"venus","label":"Venus","icon":"🟠"},{"id":"earth","label":"Earth","icon":"🌍","children":[{"id":"moon","label":"Moon","icon":"🌕"}]},{"id":"mars","label":"Mars","icon":"🔴"}]}]'></sb-tree>
+usage: |
+  <sb-tree label="Files" items='[{"id":"src","label":"src","children":[{"id":"main","label":"main.go"},{"id":"util","label":"util.go"}]},{"id":"readme","label":"README.md"}]'></sb-tree>
 playground:
   attrs:
     items: '[{"id":"sol","label":"Sol","icon":"☀️","children":[{"id":"venus","label":"Venus"},{"id":"earth","label":"Earth","icon":"🌍","children":[{"id":"moon","label":"Moon"}]}]}]'
@@ -39,23 +41,70 @@ Every branch below loads when you first open it, from the site's example dataset
 </div>
 ```
 
-The server side is a plain Datastar handler (Go here; any language works):
+The handler behind this demo is Go with the [Datastar SDK](https://data-star.dev/reference/sdks); any SDK works the same way. `demoAnswer` also serves plain JSON and the demo's `delay`:
 
-```go
-func children(w http.ResponseWriter, r *http.Request) {
-	id := r.URL.Query().Get("parent")
-	datastar.NewSSE(w, r).MarshalAndPatchSignals(map[string]any{
-		"_sky": map[string]any{id: childrenOf(id)}, // [{id, label, icon?, lazy?}]
+```go source=internal/web/demo_data.go#Server.demoChildren,Server.demoAnswer
+// demoChildren answers with the children of ?parent= (the top level without one).
+func (s *Server) demoChildren(w http.ResponseWriter, r *http.Request) {
+	parent := r.URL.Query().Get("parent")
+	bodies, err := s.q.ViewValue(r.Context(), func(rd *queries.Reader) ([]queries.DemoBody, error) {
+		return rd.DemoChildren(r.Context(), parent)
 	})
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	items := demoItems(bodies)
+	var patch any = items
+	if parent != "" {
+		patch = map[string]any{parent: items}
+	}
+	s.demoAnswer(w, r, "_tree", items, patch)
+}
+
+// demoAnswer writes the list as JSON, or patches it into the requested signal.
+func (s *Server) demoAnswer(w http.ResponseWriter, r *http.Request, defaultSignal string, list, patch any) {
+	w.Header().Set("Access-Control-Allow-Origin", "*") // public; used from the playground sandbox
+	if ms, _ := strconv.Atoi(r.URL.Query().Get("delay")); ms > 0 {
+		select {
+		case <-time.After(time.Duration(min(ms, 1500)) * time.Millisecond):
+		case <-r.Context().Done():
+			return
+		}
+	}
+	// Datastar's own requests accept JSON too: they always get the patch.
+	if r.Header.Get("Datastar-Request") == "" && strings.Contains(r.Header.Get("Accept"), "application/json") {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "public, max-age=300")
+		json.NewEncoder(w).Encode(list)
+		return
+	}
+	into := r.URL.Query().Get("into")
+	if into == "" {
+		into = defaultSignal
+	}
+	if !signalNameRe.MatchString(into) {
+		http.Error(w, "into must be a signal name", http.StatusBadRequest)
+		return
+	}
+	js, err := json.Marshal(map[string]any{into: patch})
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	// Through lith's sse, which compresses: the edge leaves text/event-stream to it.
+	if stream, err := sse.Open(w, r, sse.Options{}); err == nil {
+		stream.CloseWith(sse.PatchSignals(js, false))
+	}
 }
 ```
 
-Without Datastar signals, the server can also re-render the element with a new `loaded` (or `items`, `value`, `expanded`) attribute: a changed attribute always wins.
+Without Datastar signals, the server can also re-render the element with a new `loaded` (or `items`, `value`, `expanded`) attribute: a changed attribute always wins, and a removed `value` or `expanded` is ignored. Children can come in either: a lazy item stops loading once `items` or `loaded` has its children. To clear the selection or close every branch, send `value=""` or `expanded=""`.
 
 ### Multiple selection
 
 ```html preview
-<sb-tree selection="multiple" value="io europa" style="inline-size: 16rem"
+<sb-tree selection="multiple" value="io europa" expanded="jupiter" style="inline-size: 16rem"
   items='[{"id":"jupiter","label":"Jupiter","icon":"🪐","children":[{"id":"io","label":"Io"},{"id":"europa","label":"Europa"},{"id":"ganymede","label":"Ganymede"},{"id":"callisto","label":"Callisto"}]}]'></sb-tree>
 ```
 
@@ -72,11 +121,33 @@ Each item is `{id, label, icon?, children?, lazy?}`:
 - `children`: nested items, given up front.
 - `lazy: true` without `children`: the item can be opened, and asks for its children with `sb-load`.
 
+## Forms
+
+`sb-tree` is not a form-associated element: a `<form>` doesn't submit it, `FormData` and Datastar's `contentType: 'form'` don't see it, and a form reset doesn't reset it. Send its value as a command instead: `sb-change` carries `{ name, value }` (see [With commands](#with-commands)).
+
+## Styling
+
+Style it from your page's CSS, without changing the component or importing anything into it. Custom properties, inherited properties and `::part()` all reach into its shadow root.
+
+- **Size:** set `font-size` on the element (default `0.875rem`) to scale the text; rows are at least `2rem` tall (`min-block-size` on `::part(item)`).
+- **Fonts:** the rows use your page's font.
+- **Colours:** text is `--sb-text-1`, the carets and "loading" `--sb-text-muted`. Rows turn `--sb-surface-hover` on hover; the selected row is `--sb-brand-subtle` with a `--sb-brand` edge. The focus ring is `--sb-brand-light`, corners `--sb-radius-sm`. `--sb-notch: 0` turns the stepped pixel carets into plain triangles that turn smoothly.
+- **Parts:** `tree` and `item` (every row). Selected rows are also `selected`, so `::part(item selected)` styles only those; it moves with the selection. Your page's `::part()` rules win over the component's own, without `!important`.
+
+```html preview
+<style>
+  .my-tree { font-size: 1rem; --sb-brand: var(--sb-accent); }
+  .my-tree::part(item) { min-block-size: 2.5rem; }
+  .my-tree::part(item selected) { font-weight: 700; }
+</style>
+<sb-tree class="my-tree" label="Files" value="main" expanded="src" items='[{"id":"src","label":"src","children":[{"id":"main","label":"main.go"},{"id":"util","label":"util.go"}]},{"id":"readme","label":"README.md"}]'></sb-tree>
+```
+
 ## Accessibility
 
 It follows the WAI-ARIA tree pattern:
 
 - **Structure:** `tree` and `treeitem` roles, with level, position and expanded state.
-- **Focus:** one item at a time is in the tab order.
+- **Focus:** one item at a time is in the tab order. Tab lands on the selected item (the first one visible), otherwise on the item focused last, or the first.
 - **Keys:** Up and Down move, Right opens (or moves to the first child), Left closes (or moves to the parent), Home and End jump, and Enter or Space selects.
 - **Loading:** a branch that is loading is marked `aria-busy`.

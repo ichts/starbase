@@ -11,6 +11,7 @@ tasks:
 
   live:
     desc: Run the dev server with live reload (templ + air)
+    deps: [typescript]
     cmds:
       - go tool air
 
@@ -21,7 +22,7 @@ tasks:
 
   build:
     desc: Build the production binary
-    deps: [generate]
+    deps: [generate, typescript]
     vars:
       VERSION:
         sh: git describe --tags --always --dirty 2>/dev/null || echo dev
@@ -36,7 +37,7 @@ tasks:
 
   test:
     desc: Run all tests (includes validation of every component folder)
-    deps: [generate]
+    deps: [generate, typescript]
     cmds:
       - go vet ./...
       - go test ./...
@@ -51,10 +52,36 @@ tasks:
     cmds:
       - go run -tags dev ./cmd/manifests
 
+  listings:
+    desc: Rewrite the Go listings in the docs (```go source=path#Name) from their source
+    cmds:
+      - go run ./cmd/listings {{.CLI_ARGS}}
+
+  ts:
+    desc: Compile the TypeScript components (components/<slug>/<slug>.ts) into their .js
+    deps: [typescript]
+    cmds:
+      - go run ./cmd/tsgen {{.CLI_ARGS}}
+
+  dist:
+    desc: "Write components as one file each, as the site serves them: task dist -- -out js kanban-board modal"
+    cmds:
+      - go run ./cmd/dist {{.CLI_ARGS}}
+
   new:
     desc: "Scaffold a component: task new -- my-widget --category forms"
     cmds:
       - go run ./cmd/newcomponent {{.CLI_ARGS}}
+
+  visits:
+    desc: "Build the visits report from the web host's Caddy logs (tmp/visits-<date>.html)"
+    cmds:
+      - bash scripts/visits/report.sh {{.CLI_ARGS}}
+
+  typescript:
+    desc: Fetch the pinned TypeScript compiler the binary embeds for the playground's type check (once)
+    cmds:
+      - go run ./cmd/fetchtsc
 
   vendor-prism:
     desc: Rebuild the vendored Prism ES module used by sb-code-editor
@@ -62,9 +89,6 @@ tasks:
       - sh scripts/vendor-prism.sh
 
   vendor:
-    desc: Re-download the pinned Datastar + Rocket bundle
-    vars:
-      DATASTAR_VERSION: v1.0.4
+    desc: Rebuild the vendored Datastar + Rocket bundle (the pinned release with patches/rocket applied)
     cmds:
-      - curl -sSfL -o static/vendor/datastar-rocket.js https://cdn.jsdelivr.net/gh/starfederation/datastar@{{.DATASTAR_VERSION}}/bundles/datastar-rocket.js
-      - curl -sSfL -o static/vendor/datastar-rocket.js.map https://cdn.jsdelivr.net/gh/starfederation/datastar@{{.DATASTAR_VERSION}}/bundles/datastar-rocket.js.map
+      - DATASTAR_VERSION=v1.0.4 sh scripts/vendor-rocket.sh

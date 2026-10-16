@@ -12,25 +12,32 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/zweiundeins/lith/sqlite"
+
 	"starbase/internal/model"
 )
 
-type Queries struct{ db *sql.DB }
+type Queries struct{ db *sqlite.DB }
 
-func New(db *sql.DB) *Queries { return &Queries{db: db} }
+func New(db *sqlite.DB) *Queries { return &Queries{db: db} }
 
 // Reader runs queries against one snapshot.
 type Reader struct{ tx *sql.Tx }
 
-// View runs fn inside a read transaction.
+// View runs fn inside a read transaction of its own.
 func (q *Queries) View(ctx context.Context, fn func(*Reader) error) error {
-	tx, err := q.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	return fn(&Reader{tx: tx})
+	return q.db.View(ctx, func(tx *sql.Tx) error { return fn(Read(tx)) })
 }
+
+// ViewValue runs fn like View and returns what it returned, or the zero
+// value and the error.
+func (q *Queries) ViewValue[T any](ctx context.Context, fn func(*Reader) (T, error)) (T, error) {
+	return q.db.ViewValue(ctx, func(tx *sql.Tx) (T, error) { return fn(Read(tx)) })
+}
+
+// Read runs queries in a read transaction that is already open: a render
+// worker's, which every view it renders in a tick shares.
+func Read(tx *sql.Tx) *Reader { return &Reader{tx: tx} }
 
 // SessionUser returns the user bound to sid, or nil.
 func (r *Reader) SessionUser(ctx context.Context, sid string) (*model.User, error) {
@@ -68,6 +75,25 @@ func (r *Reader) Tab(ctx context.Context, sid, tabID string) (st model.TabState,
 		return model.TabState{}, false, nil
 	}
 	return st, true, nil
+}
+
+// Prefs returns the session's preferences (zero when nothing is stored).
+func (r *Reader) Prefs(ctx context.Context, sid string) (p model.SessionPrefs, err error) {
+	if sid == "" {
+		return p, nil
+	}
+	var raw string
+	err = r.tx.QueryRowContext(ctx, `SELECT data FROM session_prefs WHERE sid = ?`, sid).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return p, nil
+	}
+	if err != nil {
+		return p, err
+	}
+	if json.Unmarshal([]byte(raw), &p) != nil {
+		return model.SessionPrefs{}, nil
+	}
+	return p, nil
 }
 
 // Card is one component in the gallery.
@@ -115,10 +141,11 @@ type BrowseResult struct {
 	Total  int            // all categories, for the current search
 }
 
-// Browse lists active components matching the filter.
+// Browse lists active, listed components matching the filter (unlisted ones
+// belong to the site itself, e.g. the playground).
 func (r *Reader) Browse(ctx context.Context, b model.Browse, userID int64) (BrowseResult, error) {
 	res := BrowseResult{Counts: map[string]int{}}
-	where := []string{"c.active"}
+	where := []string{"c.active", "c.listed"}
 	var args []any
 	if fts := FTSQuery(b.Q); fts != "" {
 		where = append(where, "c.slug IN (SELECT slug FROM components_fts WHERE components_fts MATCH ?)")
@@ -190,7 +217,7 @@ type Stats struct {
 func (r *Reader) Stats(ctx context.Context) (Stats, error) {
 	var s Stats
 	err := r.tx.QueryRowContext(ctx, `
-		SELECT count(*), count(DISTINCT author), coalesce(sum(stars), 0) FROM components WHERE active`).
+		SELECT count(*), count(DISTINCT author), coalesce(sum(stars), 0) FROM components WHERE active AND listed`).
 		Scan(&s.Components, &s.Authors, &s.Stars)
 	return s, err
 }
@@ -263,12 +290,26 @@ func (r *Reader) BoardCells(ctx context.Context, board string, size int) (string
 
 // ComponentFile is one published file of a component version.
 func (r *Reader) ComponentFile(ctx context.Context, slug, hash, path string) (body []byte, integrity string, ok bool, err error) {
-	err = r.tx.QueryRowContext(ctx, `SELECT body, integrity FROM component_files WHERE slug = ? AND hash = ? AND path = ?`,
+	err = r.tx.QueryRowContext(ctx, `
+		SELECT b.body, f.integrity FROM component_files f JOIN file_bodies b ON b.integrity = f.integrity
+		WHERE f.slug = ? AND f.hash = ? AND f.path = ?`,
 		slug, hash, path).Scan(&body, &integrity)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, "", false, nil
 	}
 	return body, integrity, err == nil, err
+}
+
+// FileIntegrity is the stored (frozen) SRI hash of one file of a component
+// version, or "" when that file isn't stored.
+func (r *Reader) FileIntegrity(ctx context.Context, slug, hash, path string) (string, error) {
+	var sri string
+	err := r.tx.QueryRowContext(ctx, `SELECT integrity FROM component_files WHERE slug = ? AND hash = ? AND path = ?`,
+		slug, hash, path).Scan(&sri)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return sri, err
 }
 
 // Snapshot is a published snapshot of the whole catalog.
@@ -315,7 +356,7 @@ type SitemapEntry struct {
 
 // SitemapComponents lists the active components, for the sitemap.
 func (r *Reader) SitemapComponents(ctx context.Context) ([]SitemapEntry, error) {
-	rows, err := r.tx.QueryContext(ctx, `SELECT slug, updated_at FROM components WHERE active = 1 ORDER BY slug`)
+	rows, err := r.tx.QueryContext(ctx, `SELECT slug, updated_at FROM components WHERE active = 1 AND listed = 1 ORDER BY slug`)
 	if err != nil {
 		return nil, err
 	}

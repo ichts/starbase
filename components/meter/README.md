@@ -2,12 +2,14 @@
 name: Meter
 tag: sb-meter
 category: feedback
-summary: A segmented pixel bar for levels, progress and resources.
+summary: A segmented pixel bar for levels and resources.
 author: zweiundeins
-tags: [progress, level, bar, battery, fuel]
+tags: [level, bar, battery, fuel]
 since: 2026-09-21
 preview: |
   <sb-meter label="Shields" value="75" unit="%" style="--sb-meter-width: 13rem"></sb-meter>
+usage: |
+  <sb-meter label="Shields" value="75" unit="%"></sb-meter>
 playground:
   props:
     value: {min: 0, max: 100}
@@ -18,7 +20,9 @@ playground:
   values: {value: 58, label: Shields, unit: "%"}
 ---
 
-A row of pixel blocks lit up to `value`. The whole bar changes colour at the `warn` and `danger` thresholds, and blocks light up in a quick cascade. When `danger` is below `warn`, low values are the bad ones, as with fuel or batteries.
+A row of pixel blocks lit up to `value`, from `min` to `max`. Any value above `min` lights at least one block, and only `max` lights them all. When the value changes, blocks light up in a quick cascade from the edge that moves.
+
+The whole bar changes colour at the `warn` and `danger` thresholds, given in value units. Left unset, they sit at 70% and 90% of the range (70 and 90 on 0 to 100). When `danger` is below `warn`, low values are the bad ones, as with fuel or batteries. To keep the bar in its normal colour, set both above `max`.
 
 ## Examples
 
@@ -44,11 +48,75 @@ A row of pixel blocks lit up to `value`. The whole bar changes colour at the `wa
 ### Live from the server
 
 ```html preview
-<div data-signals="{_tm: {fuel: 100}}" data-init="@get('/demo/telemetry')" style="inline-size: min(100%, 22rem)">
+<div data-signals="{_tm: {fuel: 100}}" style="inline-size: min(100%, 22rem)">
+  <div id="telemetry" hidden data-init="@get('/demo/telemetry', {retry: 'error', retryMaxCount: Infinity, retryInterval: 400, retryMaxWait: 4000})"></div>
   <sb-meter label="Fuel" unit="%" warn="30" danger="15" segments="20" data-attr:value="Math.round($_tm.fuel)" data-preserve-attr="value"></sb-meter>
 </div>
 ```
 
+The endpoint is Go with the `sse` package of lith, Starbase's runtime; any [Datastar SDK](https://data-star.dev/reference/sdks) works the same way. `TelemetryAt` computes the sample from the clock, so every viewer watches the same flight. When the server stops for a deploy, its last event replaces the hidden element by a copy, which opens the stream again, and `retry: 'error'` keeps asking until the next process answers:
+
+```go source=internal/web/demo.go#Server.demoTelemetry
+// demoTelemetry streams the demo mission as signal patches ($_tm): a pure
+// query stream, no commands, no database. When the server stops (a deploy),
+// the last event asks the page to open it again from #telemetry.
+func (s *Server) demoTelemetry(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*") // public; used from the playground sandbox
+	if s.ctx.Err() != nil {
+		// Stopping: the page retries the 503 until the next process answers.
+		http.Error(w, "the server is restarting", http.StatusServiceUnavailable)
+		return
+	}
+	// Uncompressed: an event is 130 bytes, where an encoder would hold 430 KiB
+	// or more for as long as a page shows the telemetry.
+	stream, err := sse.Open(w, r, sse.Options{NoCompression: true})
+	if err != nil {
+		return
+	}
+	var last [][]byte
+	defer func() { stream.CloseWith(last...) }()
+	tick := time.NewTicker(250 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		tm, _ := json.Marshal(map[string]any{"_tm": TelemetryAt(time.Now())})
+		if err := stream.Write(sse.PatchSignals(tm, false)); err != nil {
+			return
+		}
+		select {
+		case <-tick.C:
+		case <-r.Context().Done():
+			return
+		case <-s.ctx.Done():
+			last = append(last, sse.Reconnect(ui.TelemetryID))
+			return
+		}
+	}
+}
+```
+
+## Styling
+
+Style it from your page's CSS, without changing the component or importing anything into it. Custom properties, inherited properties and `::part()` all reach into its shadow root.
+
+- **Size:** `--sb-meter-width` (default `22rem`) is the widest it gets, `--sb-meter-height` (default `12px`) the height of the blocks; `segments` sets how many there are.
+- **Fonts:** the label and the value use your page's font.
+- **Colours:** lit blocks are `--sb-ok`, `--sb-warn` past the `warn` threshold and `--sb-danger` past `danger`. The track is `--sb-surface-inset` with a `--sb-border` edge, and unlit blocks are a tint of that border. The label is `--sb-text-2`, the value `--sb-text-1`.
+- **Motion:** a block lights up in two steps; `--sb-notch: 0` fades it in smoothly instead.
+- **Parts:** `label`, `value` and `bar`, and `segment` for every block; the lit ones are also `lit`: `::part(segment lit)`. Your page's `::part()` rules win over the component's own, without `!important`.
+- **States:** the host has `:state(ok)`, `:state(warn)` or `:state(danger)`, so the tone can restyle any part: `sb-meter:state(danger)::part(label)`.
+
+```html preview
+<style>
+  .my-meter { --sb-meter-width: 16rem; --sb-meter-height: 20px; --sb-ok: var(--sb-accent); }
+  .my-meter::part(value) { font-size: 1.25rem; }
+</style>
+<sb-meter class="my-meter" label="Shields" value="45" unit="%"></sb-meter>
+```
+
 ## Accessibility
 
-The bar is a `role="meter"` with min, max, value and a readable value text. The colour change is backed by the number, so tone never carries the meaning alone.
+The element itself is the meter: `role="meter"` with `min`, `max`, the value (held within the range) and the shown text, such as `75%`, as its value text. They are set through `ElementInternals`, so page morphs can't strip them. Its name is `label`; an `aria-label` on the element wins over it, and without either the name is "Meter". The caption and number above the bar are hidden from assistive technology, so nothing is read twice.
+
+The fill and the number show the level; the tone is colour only, and assistive technology gets the value, not whether it is past `warn` or `danger`. Where that matters, say it in the label or next to the meter. In forced-colours mode (Windows High Contrast), the lit blocks are drawn in the text colour inside an outlined frame.
+
+`sb-meter` shows a level within a known range, like the native `<meter>`. For the progress of a task, use a progress bar (`role="progressbar"`).

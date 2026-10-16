@@ -1,12 +1,13 @@
 package commands
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"regexp"
 	"time"
+
+	"github.com/zweiundeins/lith/writer"
 
 	"starbase/internal/model"
 )
@@ -22,10 +23,10 @@ func validTab(sid, tabID string) error {
 
 // updateTab reads the tab's state (or seed when absent), applies fn and
 // writes it back.
-func updateTab(ctx context.Context, tx *sql.Tx, sid, tabID string, seed model.TabState, fn func(*model.TabState)) error {
+func updateTab(tx *writer.Tx, sid, tabID string, seed model.TabState, fn func(*model.TabState)) error {
 	st := seed
 	var raw string
-	err := tx.QueryRowContext(ctx, `SELECT data FROM tab_state WHERE sid = ? AND tab_id = ?`, sid, tabID).Scan(&raw)
+	err := tx.QueryRow(`SELECT data FROM tab_state WHERE sid = ? AND tab_id = ?`, sid, tabID).Scan(&raw)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 	case err != nil:
@@ -40,7 +41,7 @@ func updateTab(ctx context.Context, tx *sql.Tx, sid, tabID string, seed model.Ta
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `
+	_, err = tx.Exec(`
 		INSERT INTO tab_state (sid, tab_id, data, updated_at) VALUES (?, ?, ?, ?)
 		ON CONFLICT (sid, tab_id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at`,
 		sid, tabID, string(b), time.Now().Unix())
@@ -54,55 +55,19 @@ type SetBrowseFilter struct {
 }
 
 func (c SetBrowseFilter) Validate() error { return validTab(c.SID, c.TabID) }
-func (c SetBrowseFilter) Scope() string   { return c.SID }
 
-func (c SetBrowseFilter) Apply(ctx context.Context, tx *sql.Tx) error {
-	return updateTab(ctx, tx, c.SID, c.TabID, model.TabState{}, func(st *model.TabState) {
+func (c SetBrowseFilter) Apply(tx *writer.Tx) error {
+	tx.Touch(TabTopic(c.TabID))
+	return updateTab(tx, c.SID, c.TabID, model.TabState{}, func(st *model.TabState) {
 		st.Browse = c.Browse.Normalize()
 	})
 }
 
-// SetPreviewTheme selects the token set shown on the Themes page.
-type SetPreviewTheme struct {
-	SID, TabID string
-	Theme      string
-}
-
-func (c SetPreviewTheme) Validate() error {
-	if !model.ValidPreviewTheme(c.Theme) {
-		return errors.New("unknown theme")
-	}
-	return validTab(c.SID, c.TabID)
-}
-func (c SetPreviewTheme) Scope() string { return c.SID }
-
-func (c SetPreviewTheme) Apply(ctx context.Context, tx *sql.Tx) error {
-	return updateTab(ctx, tx, c.SID, c.TabID, model.TabState{}, func(st *model.TabState) {
-		st.PreviewTheme = c.Theme
-	})
-}
-
-// SetPreviewStyle turns the 8-bit details of the Themes page previews on or off.
-type SetPreviewStyle struct {
-	SID, TabID string
-	Smooth     bool
-}
-
-func (c SetPreviewStyle) Validate() error { return validTab(c.SID, c.TabID) }
-func (c SetPreviewStyle) Scope() string   { return c.SID }
-
-func (c SetPreviewStyle) Apply(ctx context.Context, tx *sql.Tx) error {
-	return updateTab(ctx, tx, c.SID, c.TabID, model.TabState{}, func(st *model.TabState) {
-		st.PreviewSmooth = c.Smooth
-	})
-}
-
-// PruneTabs forgets tab state that has not been touched for a while.
+// PruneTabs forgets tab state that has not been touched for a while. It
+// touches no topic: no open page shows it.
 type PruneTabs struct{ OlderThan time.Duration }
 
-func (c PruneTabs) Scope() string { return "" } // touches no live view
-
-func (c PruneTabs) Apply(ctx context.Context, tx *sql.Tx) error {
-	_, err := tx.ExecContext(ctx, `DELETE FROM tab_state WHERE updated_at < ?`, time.Now().Add(-c.OlderThan).Unix())
+func (c PruneTabs) Apply(tx *writer.Tx) error {
+	_, err := tx.Exec(`DELETE FROM tab_state WHERE updated_at < ?`, time.Now().Add(-c.OlderThan).Unix())
 	return err
 }

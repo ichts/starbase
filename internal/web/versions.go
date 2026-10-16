@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/zweiundeins/lith/edge"
+
 	"starbase/internal/catalog"
 	"starbase/internal/queries"
 )
@@ -15,6 +17,7 @@ import (
 // so other sites can pin exactly what they reviewed:
 //
 //	/c/<slug>@<hash>/<file>.js      one version of a component's file
+//	/c/<slug>@<hash>/<slug>.bundle.min.js  that version in one file (catalog/onefile.go)
 //	/c/@<catalog>/autoloader.js     a snapshot of the whole catalog's autoloader
 //	/c/@<catalog>/importmap.json    SRI hashes for everything that snapshot loads
 //
@@ -46,20 +49,31 @@ func (s *Server) serveVersioned(w http.ResponseWriter, r *http.Request, slug, ha
 		return
 	}
 	var body []byte
-	if c, ok := s.catalog.Get(slug); ok && c.Hash == hash {
+	c, current := s.catalog.Get(slug)
+	current = current && c.Hash == hash
+	switch {
+	case current && !catalog.IsMinPath(file):
 		body, _ = fs.ReadFile(s.catalog.FS, slug+"/"+file) // the current version
-	} else {
+	default:
+		// Older versions, and every minified file: the stored copy is the one
+		// that was first published, so an esbuild upgrade can't change the
+		// bytes behind a URL someone pinned.
 		s.q.View(r.Context(), func(rd *queries.Reader) (err error) {
 			body, _, _, err = rd.ComponentFile(r.Context(), slug, hash, file)
 			return
 		})
+		if body == nil && current { // not synced yet (tests, first start)
+			if mins, err := s.catalog.MinFiles(c); err == nil {
+				body = mins[file]
+			}
+		}
 	}
 	if body == nil {
 		http.NotFound(w, r)
 		return
 	}
 	s.immutableModule(w, "text/javascript; charset=utf-8")
-	w.Write(body)
+	edge.ServePrecompressed(w, r, body)
 }
 
 func (s *Server) serveSnapshot(w http.ResponseWriter, r *http.Request, hash, file string) {
@@ -87,7 +101,7 @@ func (s *Server) serveSnapshot(w http.ResponseWriter, r *http.Request, hash, fil
 	}
 	if file == "autoloader.js" {
 		s.immutableModule(w, "text/javascript; charset=utf-8")
-		w.Write([]byte(auto))
+		edge.ServePrecompressed(w, r, []byte(auto))
 		return
 	}
 	// Merge "integrity" into your import map; browsers then refuse any
@@ -98,9 +112,8 @@ func (s *Server) serveSnapshot(w http.ResponseWriter, r *http.Request, hash, fil
 		m[base+f.Slug+"@"+f.Hash+"/"+f.Path] = f.Integrity
 	}
 	s.immutableModule(w, "application/json")
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
-	enc.Encode(map[string]any{"integrity": m})
+	body, _ := json.MarshalIndent(map[string]any{"integrity": m}, "", "  ")
+	edge.ServePrecompressed(w, r, append(body, '\n'))
 }
 
 func (s *Server) immutableModule(w http.ResponseWriter, contentType string) {

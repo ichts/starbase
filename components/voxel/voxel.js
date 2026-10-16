@@ -82,7 +82,6 @@ const MODELS = {
 		voxel(x, y, z) {
 			const d = Math.hypot(x, y, z)
 			if (d <= 7.6) {
-				if (d < 6.4) return null // hollow: only the shell is ever visible
 				if (Math.abs(y) >= 6.3) return 'ice'
 				return noise(x / 3.2 + 7, y / 3.2, z / 3.2) > 0.55 ? 'green' : 'ocean'
 			}
@@ -213,6 +212,7 @@ const styles = /* css */ `
 	aspect-ratio: 1;
 	vertical-align: middle;
 }
+:host([hidden]) { display: none; }
 canvas {
 	display: block;
 	inline-size: 100%;
@@ -227,9 +227,6 @@ canvas:focus-visible { outline: 2px solid var(--_focus); outline-offset: 4px; bo
 
 const rad = (d) => (d * Math.PI) / 180
 
-// setup hands onFirstRender a function that attaches the rendered canvas.
-const buffers = new WeakMap()
-
 rocket('sb-voxel', {
 	props: ({ number, oneOf }) => ({
 		model: oneOf('rocket', 'satellite', 'planet').default('rocket').docs({ description: 'Which voxel model to show.' }),
@@ -241,99 +238,94 @@ rocket('sb-voxel', {
 	}),
 	manifest: {
 		events: [
-			{ name: 'sb-orbit', kind: 'custom-event', bubbles: true, composed: true, description: 'After a drag. detail: { yaw, pitch } (effective angles).' },
+			{ name: 'sb-orbit', kind: 'custom-event', bubbles: true, composed: true, description: 'After a drag or an arrow-key turn. detail: { yaw, pitch } (effective angles).' },
 		],
 	},
 	// The canvas is repainted imperatively; props never re-render the DOM.
 	renderOnPropChange: false,
-	setup: ({ action, adoptStyles, cleanup, emit, host, observeProps, props }) => {
-		adoptStyles(host, styles)
+	setup: ({ adoptStyles, host }) => adoptStyles(host, styles),
+	// Everything else needs the canvas, so it starts once it is rendered.
+	onFirstRender: ({ action, cleanup, emit, host, observeProps, props, refs: { canvas } }) => {
+		const ctx = canvas.getContext('2d')
+		const img = ctx.createImageData(RES, RES)
 		const reduced = matchMedia('(prefers-reduced-motion: reduce)')
 		const zbuf = new Float32Array(RES * RES)
-		let canvas = null, ctx = null, img = null // attached in onFirstRender
 
-		// Local orbit state: drag offsets and spin, never written to attributes.
-		let dragYaw = 0, dragPitch = 0, spun = 0, drag = null
-		let visible = true, raf = 0, last = 0, dirty = true
+		// The view: the page's angles, turned locally by drags and keys (never
+		// written to attributes), plus the spin.
+		let yaw = props.yaw, pitch = props.pitch, spun = 0, drag = null, turned = 0
+		let visible = true, raf = 0, last = 0
 
-		const angles = () => {
-			const yaw = props.yaw + dragYaw + spun
-			const pitch = Math.max(-89, Math.min(89, props.pitch + dragPitch))
-			return { yaw: ((yaw + 540) % 360) - 180, pitch }
-		}
+		const angles = () => ({ yaw: ((((yaw + spun) % 360) + 540) % 360) - 180, pitch })
 		const paint = () => {
-			const { yaw, pitch } = angles()
-			draw(img, zbuf, props.model, rad(yaw), rad(pitch), props.zoom, rad(props.light))
+			const a = angles()
+			draw(img, zbuf, props.model, rad(a.yaw), rad(a.pitch), props.zoom, rad(props.light))
 			ctx.putImageData(img, 0, 0)
-			canvas.setAttribute('aria-label', `Voxel ${props.model}, yaw ${Math.round(yaw)}°, pitch ${Math.round(pitch)}°`)
+			// While it spins, the name says so rather than changing every frame.
+			const label = `Voxel ${props.model}, ${last ? 'spinning' : `yaw ${Math.round(a.yaw)}°, pitch ${Math.round(a.pitch)}°`}`
+			if (canvas.ariaLabel !== label) canvas.ariaLabel = label
 		}
+		// Each frame paints; while spinning (and visible) it asks for the next one.
 		const tick = (t) => {
 			raf = 0
-			const dt = last ? (t - last) / 1000 : 0
-			last = t
 			const spinning = props.spin && !reduced.matches
-			if (spinning) {
-				spun = (spun + props.spin * dt) % 360
-				dirty = true
-			}
-			if (dirty && canvas) {
-				dirty = false
-				paint()
-			}
-			if (spinning && visible) schedule()
-			else last = 0
-		}
-		const schedule = () => {
-			if (!raf && visible) raf = requestAnimationFrame(tick)
+			if (spinning) spun = (spun + (props.spin * (last ? t - last : 0)) / 1000) % 360
+			last = spinning && visible ? t : 0
+			if (last) invalidate()
+			paint()
 		}
 		const invalidate = () => {
-			dirty = true
-			schedule()
+			if (!raf && visible) raf = requestAnimationFrame(tick)
 		}
 		observeProps(invalidate)
+		// A new angle from the page wins over the local orbit.
+		observeProps(() => { yaw = props.yaw; spun = 0 }, 'yaw')
+		observeProps(() => { pitch = props.pitch }, 'pitch')
 		// No declarative hook exists for these two: keep them imperative.
 		reduced.addEventListener('change', invalidate)
 		const io = new IntersectionObserver(([e]) => {
-			visible = e.isIntersecting
-			if (visible) invalidate()
+			if ((visible = e.isIntersecting)) invalidate()
 		})
 		io.observe(host)
+		invalidate()
 
-		// Drag (one gesture: down, move, up/cancel) or use the arrow keys to orbit.
+		// Turn the view; the pitch stops at ±89°. Only a real change is a turn.
+		const turn = (dy, dp) => {
+			const p = Math.max(-89, Math.min(89, pitch + dp))
+			if (!dy && p === pitch) return
+			yaw += dy
+			pitch = p
+			turned = 1
+			invalidate()
+		}
+		// One action for both gestures: a drag (one pointer: down, move, up or
+		// cancel) and an arrow key (down, repeats, up). Its end reports the turn.
 		action('orbit', ({ el, evt }) => {
-			if (evt.type === 'pointerdown') {
-				drag = { x: evt.clientX, y: evt.clientY }
+			if (evt.type === 'keydown') {
+				const step = evt.shiftKey ? 15 : 5
+				const move = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[evt.key]
+				if (move) {
+					evt.preventDefault()
+					turn(...move)
+				}
+			} else if (evt.type === 'pointerdown') {
+				if (evt.button || !evt.isPrimary) return // the first finger, the main button
+				drag = { id: evt.pointerId, x: evt.clientX, y: evt.clientY }
 				el.setPointerCapture(evt.pointerId)
-			} else if (!drag) {
-				return
+			} else if (drag?.id !== evt.pointerId) {
+				return // another pointer, or a key up during a drag
 			} else if (evt.type === 'pointermove') {
 				const k = 360 / el.clientWidth
-				dragYaw += (evt.clientX - drag.x) * k
-				dragPitch += (evt.clientY - drag.y) * k * 0.5
-				drag = { x: evt.clientX, y: evt.clientY }
-				invalidate()
+				turn((evt.clientX - drag.x) * k, (evt.clientY - drag.y) * k * 0.5)
+				drag.x = evt.clientX
+				drag.y = evt.clientY
 			} else {
 				drag = null
-				emit('sb-orbit', angles())
+				if (turned) emit('sb-orbit', angles())
+				turned = 0
 			}
 		})
-		action('key', ({ evt }) => {
-			const step = evt.shiftKey ? 15 : 5
-			const moves = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }
-			if (!(evt.key in moves)) return
-			evt.preventDefault()
-			dragYaw += moves[evt.key][0]
-			dragPitch += moves[evt.key][1]
-			invalidate()
-			emit('sb-orbit', angles())
-		})
 
-		buffers.set(host, (el) => {
-			canvas = el
-			ctx = el.getContext('2d')
-			img = ctx.createImageData(RES, RES)
-			invalidate()
-		})
 		cleanup(() => {
 			cancelAnimationFrame(raf)
 			io.disconnect()
@@ -342,12 +334,13 @@ rocket('sb-voxel', {
 	},
 	render: ({ html }) => html`
 		<canvas part="canvas" width="${RES}" height="${RES}" tabindex="0" role="img"
+			aria-description="Drag or use the arrow keys to turn it"
 			data-ref:canvas
 			data-on:pointerdown="@orbit()"
 			data-on:pointermove="@orbit()"
 			data-on:pointerup="@orbit()"
 			data-on:pointercancel="@orbit()"
-			data-on:keydown="@key()"></canvas>
+			data-on:keydown="@orbit()"
+			data-on:keyup="@orbit()"></canvas>
 	`,
-	onFirstRender: ({ host, refs }) => buffers.get(host)(refs.canvas),
 })

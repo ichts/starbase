@@ -1,12 +1,12 @@
 package commands
 
 import (
-	"context"
-	"database/sql"
 	"errors"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/zweiundeins/lith/writer"
 
 	"starbase/internal/model"
 )
@@ -51,10 +51,9 @@ func (c SetFlight) Validate() error {
 	return nil
 }
 
-func (c SetFlight) Scope() string { return c.SID }
-
-func (c SetFlight) Apply(ctx context.Context, tx *sql.Tx) error {
-	return updateTab(ctx, tx, c.SID, c.TabID, model.TabState{}, func(st *model.TabState) {
+func (c SetFlight) Apply(tx *writer.Tx) error {
+	tx.Touch(TabTopic(c.TabID))
+	return updateTab(tx, c.SID, c.TabID, model.TabState{}, func(st *model.TabState) {
 		f := st.Flight.OrDefault()
 		switch c.Name {
 		case "thrust":
@@ -63,6 +62,7 @@ func (c SetFlight) Apply(ctx context.Context, tx *sql.Tx) error {
 			f.Shields = c.Value == "true"
 		case "callsign":
 			f.Callsign = strings.ToUpper(strings.TrimSpace(c.Value)) // the server normalizes
+			f.CallsignRev++                                          // answered, even when nothing changed
 		}
 		st.Flight = f
 	})

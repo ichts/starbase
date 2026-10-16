@@ -1,12 +1,12 @@
 package commands
 
 import (
-	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"regexp"
 	"time"
+
+	"github.com/zweiundeins/lith/writer"
 
 	"starbase/internal/model"
 )
@@ -61,9 +61,9 @@ func (c SaveSnippet) Validate() error {
 	return nil
 }
 
-func (c SaveSnippet) Scope() string { return c.SID }
-
-func (c SaveSnippet) Apply(ctx context.Context, tx *sql.Tx) error {
+// Apply touches the saving tab only: no other page shows a new snippet.
+func (c SaveSnippet) Apply(tx *writer.Tx) error {
+	tx.Touch(TabTopic(c.TabID))
 	files, err := json.Marshal(c.Files)
 	if err != nil {
 		return err
@@ -75,7 +75,7 @@ func (c SaveSnippet) Apply(ctx context.Context, tx *sql.Tx) error {
 	if c.UserID != 0 {
 		user = c.UserID
 	}
-	res, err := tx.ExecContext(ctx, `UPDATE snippet_stats SET bytes = bytes + ? WHERE id = 1 AND bytes + ? <= ?`,
+	res, err := tx.Exec(`UPDATE snippet_stats SET bytes = bytes + ? WHERE id = 1 AND bytes + ? <= ?`,
 		len(files), len(files), MaxSnippetStore)
 	if err != nil {
 		return err
@@ -83,11 +83,11 @@ func (c SaveSnippet) Apply(ctx context.Context, tx *sql.Tx) error {
 	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrSnippetStoreFull
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO snippets (id, files, component, user_id, created_at) VALUES (?, ?, ?, ?, ?)`,
+	if _, err := tx.Exec(`INSERT INTO snippets (id, files, component, user_id, created_at) VALUES (?, ?, ?, ?, ?)`,
 		c.ID, string(files), comp, user, time.Now().Unix()); err != nil {
 		return err
 	}
-	return updateTab(ctx, tx, c.SID, c.TabID, model.TabState{}, func(st *model.TabState) {
+	return updateTab(tx, c.SID, c.TabID, model.TabState{}, func(st *model.TabState) {
 		st.PlaygroundShare = c.ID
 	})
 }

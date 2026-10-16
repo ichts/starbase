@@ -66,10 +66,10 @@ templ ThemesPage(v ThemesView) {
 			<div class="theme-style">
 				<sb-toggle
 					label="8-bit details"
-					checked?={ !v.Smooth }
+					checked={ boolString(!v.Smooth) }
 					data-on:change="@post('/cmd/theme-style/' + (el.checked ? 'pixel' : 'smooth'))"
 				></sb-toggle>
-				<span class="muted">Pixel corners, notched frames and the pixel display font. Turn them off with <code>data-sb-style="smooth"</code>, or set only <code>--sb-notch: 0</code> to keep everything but the corners.</span>
+				<span class="muted">Pixel corners, notched frames, stepped motion and the pixel display font in capitals. Turn them off with <code>data-sb-style="smooth"</code>, or set only <code>--sb-notch: 0</code> to keep everything but the corners.</span>
 			</div>
 			<section class="theme-stage" data-sb-theme={ v.Theme } data-sb-style={ styleAttr(v.Smooth) } aria-label="Live preview">
 				for _, p := range v.Previews {
@@ -84,7 +84,7 @@ templ ThemesPage(v ThemesView) {
 			<section class="prose">
 				<h2>Use it</h2>
 				<p>Scope a theme to any element with <code>data-sb-theme</code>, or copy the overrides into your own stylesheet. Components only ever read <code>--sb-*</code> semantic tokens.</p>
-				<p>The 8-bit details are tokens too: <code>data-sb-style="smooth"</code> on any element sets <code>--sb-notch: 0</code> (plain corners with a normal radius), <code>--sb-frame-step: 1px</code> (hairline frames) and the UI font for display text. It combines with every theme.</p>
+				<p>The 8-bit details are tokens too: <code>data-sb-style="smooth"</code> on any element sets <code>--sb-notch: 0</code> (plain corners with a normal radius), <code>--sb-frame-step: 1px</code> (hairline frames), the UI font for display text and <code>--sb-display-case: none</code> (display text as written, not in capitals). At <code>--sb-notch: 0</code> stepped arrows become triangles, stepped motion runs smoothly, and pixel charts draw at the screen's resolution. It combines with every theme.</p>
 				<div class="code-block">
 					<sb-copy-button class="code-copy" value={ v.CSS }></sb-copy-button>
 					@templ.Raw(v.CSSHTML)
@@ -132,8 +132,8 @@ templ MissionControl() {
 		aria-labelledby="mission-title"
 		data-ignore-morph
 		data-signals="{_tm: {t: -8, stage: 'PAD', alt: 0, vel: 0, fuel: 100, temp: 18, pitch: 90}}"
-		data-init="@get('/demo/telemetry')"
 	>
+		<div id={ TelemetryID } hidden data-init={ telemetryInit }></div>
 		<header class="mission__head">
 			<h2 id="mission-title" class="section-title">Mission Control</h2>
 			<span class="mission__stage" data-text="$_tm.stage" data-attr:data-stage="$_tm.stage">PAD</span>
@@ -141,7 +141,7 @@ templ MissionControl() {
 		</header>
 		<div class="mission__grid">
 			<div class="mission__view">
-				<sb-starfield tint="violet" density="420" data-attr:speed="Math.round(3 + $_tm.vel * 11)" data-attr:warp="$_tm.vel > 5"></sb-starfield>
+				<sb-starfield tint="violet" density="420" label="" data-attr:speed="Math.round(3 + $_tm.vel * 11)" data-attr:warp="$_tm.vel > 5"></sb-starfield>
 				<sb-voxel model="rocket" spin="24" zoom="0.9" data-attr:pitch="Math.round(($_tm.pitch - 90) / 4)"></sb-voxel>
 			</div>
 			<div class="mission__panel">
@@ -151,7 +151,7 @@ templ MissionControl() {
 				</div>
 				<div class="mission__row">
 					<span class="mission__caption">Altitude</span>
-					<sb-sparkline data-attr:value="$_tm.alt" length="80" show-value unit=" km" tone="accent"></sb-sparkline>
+					<sb-sparkline label="Altitude" data-attr:value="$_tm.alt" length="80" show-value unit=" km" tone="accent"></sb-sparkline>
 				</div>
 				<sb-meter label="Fuel" unit="%" warn="30" danger="15" segments="20" data-attr:value="Math.round($_tm.fuel)"></sb-meter>
 			</div>
@@ -161,7 +161,7 @@ templ MissionControl() {
 			<div class="howto__body">
 				<p>The dashboard is built only from community components: <code>sb-starfield</code>, <code>sb-voxel</code>, <code>sb-gauge</code>, <code>sb-sparkline</code> and <code>sb-meter</code>. It contains no custom JavaScript. The server pushes data, signals carry it, and each component watches its attributes.</p>
 				<h3>1. The server streams signals</h3>
-				<p>The section opens one long-lived request with <code>{ "@get('/demo/telemetry')" }</code>. Four times a second the server sends a <code>datastar-patch-signals</code> event that merges fresh numbers into a single signal, <code>$_tm</code>. The data is a pure function of the clock over a 90-second mission, so the server keeps no state and every viewer watches the same flight. In CQRS terms this is a query stream: nothing is written, and hidden tabs close it and reopen it when they come back.</p>
+				<p>A hidden element in the section opens one long-lived request with <code>{ "@get('/demo/telemetry')" }</code>. Four times a second the server sends a <code>datastar-patch-signals</code> event that merges fresh numbers into a single signal, <code>$_tm</code>. The data is a pure function of the clock over a 90-second mission, so the server keeps no state and every viewer watches the same flight. In CQRS terms this is a query stream: nothing is written, and hidden tabs close it and reopen it when they come back. When the server restarts for a deploy, its last event replaces that element by a copy, which opens the request again, and <code>retry: 'error'</code> keeps asking until the new process answers.</p>
 				@templ.Raw(telemetryGo)
 				<h3>2. Signals drive attributes</h3>
 				<p>Each component is wired with <code>data-attr</code>. When <code>$_tm</code> changes, Datastar updates exactly the attributes that depend on it. Expressions can reshape the data on the way: the starfield's speed is derived from velocity, and warp switches on above 5 km/s.</p>
@@ -179,17 +179,78 @@ templ MissionControl() {
 	</section>
 }
 
+// PlaygroundSize is the size line in the playground's top bar, from the
+// $_size signal (web/playground_size.go measures every edit). The server
+// renders the first numbers, so they show before any edit. The page declares
+// $_size outside the playground: Rocket moves data-signals on a component's
+// children into the component's own scope.
+templ PlaygroundSize(size map[string]any) {
+	<span
+		slot="bar"
+		class="pg-size"
+		data-class:is-stale="$_size.stale"
+		data-attr:title="$_size.title"
+		title={ sizeText(size, "title") }
+	>
+		<span class="visually-hidden">Size: </span>
+		<strong data-text="$_size.own">{ sizeText(size, "own") }</strong> min+br
+		<span class="pg-size__total" data-show="$_size.total" style={ sizeHidden(size) }>
+			· <span data-text="$_size.total">{ sizeText(size, "total") }</span> with deps
+		</span>
+		<span class="pg-size__more">
+			· <span data-text="$_size.min">{ sizeText(size, "min") }</span> min
+			· <span data-text="$_size.raw">{ sizeText(size, "raw") }</span> raw
+		</span>
+	</span>
+}
+
 type CodePlaygroundView struct {
+	Size          map[string]any // $_size, measured from the initial component.js
 	Initial       string // JSON files
 	Deps          string // JSON {tag: module URL}
 	Component     string // slug, when opened from a component page
 	ComponentName string
 	Preview       string // component name, when opened as a pull request preview
+	PreviewRef    string // its <commit>/<slug>
 	Base          string // folder relative imports resolve against (vendored files)
 	Loaded        string // snippet id from ?s=
 	Author        string // snippet author (GitHub login), if any
 	Share         string // snippet id to offer as a link
+	ShareTS       bool   // that snippet is TypeScript, which can't be submitted yet
 	ShareURL      string
+}
+
+// sizeText is a text of $_size for the first render ("–" when the initial
+// code didn't parse and there is no number yet).
+func sizeText(size map[string]any, key string) string {
+	if t, ok := size[key].(string); ok && t != "" {
+		return t
+	}
+	return "–"
+}
+
+// sizeHidden hides the "with deps" part until data-show takes over.
+func sizeHidden(size map[string]any) templ.SafeCSS {
+	if t, _ := size["total"].(string); t == "" {
+		return "display: none"
+	}
+	return ""
+}
+
+// sizeExpr measures component.js (or component.ts) after edits (debounced;
+// a newer request cancels the one in flight).
+func sizeExpr(component string) string {
+	return "@post('/playground/size', {payload: {component: " + jsString(component) + ", " + moduleExpr + "}})"
+}
+
+// moduleExpr is the payload's name and code of the playground's module.
+const moduleExpr = "name: 'component.ts' in evt.detail.files ? 'component.ts' : 'component.js', code: evt.detail.files['component.ts'] ?? evt.detail.files['component.js'] ?? ''"
+
+// checkExpr type-checks the module on every run: each carries the files as
+// they are, and a newer request cancels the one in flight. The answer is
+// $_diag, the playground's diagnostics as JSON (web/playground_check.go).
+func checkExpr(component, preview string) string {
+	return "@post('/playground/check', {payload: {component: " + jsString(component) + ", preview: " + jsString(preview) + ", " + moduleExpr + "}})"
 }
 
 func shareExpr(component string) string {
@@ -218,10 +279,22 @@ templ CodePlaygroundPage(v CodePlaygroundView) {
 				} else {
 					Write a Rocket component and try it live. The preview runs in a sandbox with every community component available.
 				}
+				Switch to TypeScript, or start JavaScript with <code>{ "// @ts-check" }</code>, to check the code against Datastar's types.
 			</p>
 		</header>
-		<div class="code-page__island" data-ignore-morph>
-			<sb-code-playground initial={ v.Initial } deps={ v.Deps } base={ v.Base }></sb-code-playground>
+		<div class="code-page__island" data-ignore-morph data-signals:_size={ templ.JSONString(v.Size) }>
+			<sb-code-playground
+				initial={ v.Initial }
+				deps={ v.Deps }
+				base={ v.Base }
+				typescript
+				data-signals:_diag="'{}'"
+				data-attr:diagnostics="$_diag"
+				data-on:sb-change__debounce.400ms={ sizeExpr(v.Component) }
+				data-on:sb-run={ checkExpr(v.Component, v.PreviewRef) }
+			>
+				@PlaygroundSize(v.Size)
+			</sb-code-playground>
 		</div>
 		<div class="code-page__actions">
 			<button type="button" class="btn btn--primary btn--sm" data-on:click={ shareExpr(v.Component) }>
@@ -237,10 +310,14 @@ templ CodePlaygroundPage(v CodePlaygroundView) {
 				</span>
 				<a href={ templ.SafeURL(v.ShareURL) }>{ v.ShareURL }</a>
 				<sb-copy-button value={ v.ShareURL } label="Copy link"></sb-copy-button>
-				<a class="btn btn--outline btn--sm" href={ templ.SafeURL("/submit?s=" + v.Share) }>
-					@Icon("github")
-					Submit as component
-				</a>
+				if v.ShareTS {
+					<span class="muted">The catalog takes JavaScript for now, so TypeScript can't be submitted yet.</span>
+				} else {
+					<a class="btn btn--outline btn--sm" href={ templ.SafeURL("/submit?s=" + v.Share) }>
+						@Icon("github")
+						Submit as component
+					</a>
+				}
 			} else {
 				<span class="muted">Saving creates a permanent link anyone can open. Then you can submit it as a component.</span>
 			}
@@ -259,7 +336,9 @@ type BoardView struct {
 // requests to the same URL by default), or fast strokes would lose pixels.
 const paintExpr = "@post('/cmd/paint', {payload: {color: evt.detail.color, cells: evt.detail.cells}, requestCancellation: 'disabled'})"
 
-templ Showcase(board BoardView, flight model.FlightPlan) {
+// Showcase lays out the Showcase's sections. board is the board's
+// changing part (Board), or in the tab's stream the hole its view fills.
+templ Showcase(board templ.Component, flight model.FlightPlan) {
 	@MissionControl()
 	@PixelBoard(board)
 	@FlightDemo(flight)
@@ -286,7 +365,7 @@ templ FlightDemo(f model.FlightPlan) {
 					data-on:sb-change={ flightCommand } data-on:datastar-fetch={ flightRejected }></sb-slider>
 				<sb-toggle name="shields" label="Shields" confirm checked={ strconv.FormatBool(f.Shields) }
 					data-on:sb-change={ flightCommand } data-on:datastar-fetch={ flightRejected }></sb-toggle>
-				<sb-input name="callsign" label="Call sign" confirm value={ f.Callsign } hint="Letters, digits and dashes; press Enter or leave the field."
+				<sb-input name="callsign" label="Call sign" confirm value={ f.Callsign } rev={ strconv.Itoa(f.CallsignRev) } hint="Letters, digits and dashes; press Enter or leave the field."
 					data-on:sb-change={ flightCommand } data-on:datastar-fetch={ flightRejected }></sb-input>
 			</div>
 			<dl class="flight__state" aria-label="The server's state">
@@ -299,28 +378,15 @@ templ FlightDemo(f model.FlightPlan) {
 	</section>
 }
 
-// PixelBoard is server-owned: every frame of the page's render stream brings
-// the latest cells; painting is a command.
-templ PixelBoard(v BoardView) {
+// PixelBoard is the Showcase's board section around board, its changing
+// part: painting is a command, and the board's view brings the outcome.
+templ PixelBoard(board templ.Component) {
 	<section class="board-section" aria-labelledby="board-title">
-		<header class="mission__head">
-			<h2 id="board-title" class="section-title">Pixel Board</h2>
-			<span class="board-stats" aria-live="polite">
-				<span class="board-stats__dot" aria-hidden="true"></span>
-				{ itoa(v.Viewers) } watching · { itoa(int(v.Pixels)) } pixels painted
-			</span>
-		</header>
-		<div class="board-section__grid">
-			<sb-pixel-board id="board" size={ itoa(v.Size) } cells={ v.Cells } data-on:sb-paint={ paintExpr }></sb-pixel-board>
-			<div class="board-section__about">
-				<p><strong>Paint together.</strong> Everyone on this page shares one 48×48 board. Pick a colour and drag.</p>
-				<p class="muted">Faded pixels are still in flight. About 20 pixels per second each, so everybody gets a turn.</p>
-			</div>
-		</div>
+		@board
 		<details class="howto" data-preserve-attr="open">
 			<summary>How it works</summary>
 			<div class="howto__body">
-				<p>This is the "one billion checkboxes" idea from Anders Murphy's hyperlith, done the way this whole site works: CQRS over one SQLite database, and the server re-rendering the entire page for every change.</p>
+				<p>This is the "one billion checkboxes" idea from Anders Murphy's hyperlith, done the way this whole site works: CQRS over one SQLite database, and the server rendering again whatever a change touched.</p>
 				<h3>1. The board is one attribute</h3>
 				<p>The state of all 2,304 pixels is one string on the element: <code>cells</code>, a hex digit (palette index) per pixel, row by row. The server renders it like any other markup. When a new frame morphs in, the attribute changes and the component repaints its canvas. The component never owns the board. It only draws what the server says, plus your own pixels in flight, drawn faded.</p>
 				@templ.Raw(boardHTML)
@@ -328,12 +394,38 @@ templ PixelBoard(v BoardView) {
 				<p>A stroke emits <code>sb-paint</code> every 80 ms, with the cells it crossed; fast drags are interpolated so there are no gaps. Each batch is a short <code>POST</code> that answers <code>204 No Content</code> and returns no HTML. <code>requestCancellation: 'disabled'</code> matters here: by default Datastar cancels an in-flight request when a new one goes to the same URL, which would drop pixels mid-stroke. A per-session token bucket (20 pixels per second, bursts up to 60) keeps any one painter from flooding the board.</p>
 				@templ.Raw(boardGo)
 				<p>A single writer goroutine drains the command queue. Everyone's strokes that arrive together are applied in one SQLite transaction, each in its own savepoint, and committed once.</p>
-				<h3>3. Every tab re-renders the whole page</h3>
-				<p>After the commit, the hub wakes every open render stream. Each re-renders its page from a fresh read snapshot and sends the entire page again. The encoded board is cached per version, so a thousand viewers cost one query. Pages whose output didn't change send nothing.</p>
-				<p>Sending the whole page sounds wasteful until you look at the wire. The stream is compressed with Brotli, and the compressor keeps its window across frames. A full frame of this page is <strong>about 9.7 KB</strong>; the first one compresses to about 3.4 KB, and after a paint each complete re-render costs <strong>about 17 bytes</strong>. There is no diffing code anywhere: Datastar morphs the DOM, and compression takes care of the network.</p>
+				<h3>3. One render for every viewer</h3>
+				<p>After the commit, the writer tells the render loop what the batch touched, and a paint touches only the board. The board (the header above and the canvas) is a view of its own that everyone on this page shares. In its next tick (at most one every 50 ms, however many strokes came in) the loop renders it once, from a fresh read snapshot, and sends the same frame to every viewer. The encoded board is cached per version, so the cells are read once after each paint, however many people load the page. No one's page renders. The rest of this page is your tab's own view, which renders when something of yours changes, such as the flight plan below. Its frames carry the board as the board's view last sent it, so the morph leaves the board alone.</p>
+				<p>Sending the whole board after every paint sounds wasteful until you look at the wire. The stream is compressed with zstd (Brotli in browsers without it), and the compressor keeps its window across frames. The board's frame is <strong>about 3 KB</strong>, and after a paint it costs <strong>about 40 bytes</strong> on the wire (about 20 with Brotli). There is no diffing code anywhere: Datastar morphs the DOM, and compression takes care of the network.</p>
 				<h3>4. Presence</h3>
-				<p>"Watching" counts the open render streams on this page. The hub wakes the other viewers when someone joins or leaves, so the number is live too.</p>
+				<p>"Watching" counts the open render streams on this page. The number is part of the board's view: when someone joins or leaves, the render loop renders the board again, once, and sends it to every viewer.</p>
 			</div>
 		</details>
 	</section>
+}
+
+// Board is what changes on the pixel board: who is watching, the pixels
+// painted and the cells. The board's view renders it once for every
+// viewer, and every frame brings the latest cells.
+templ Board(v BoardView) {
+	<header id="board-head" class="mission__head">
+		<h2 id="board-title" class="section-title">Pixel Board</h2>
+		<span class="board-stats" aria-live="polite">
+			<span class="board-stats__dot" aria-hidden="true"></span>
+			@BoardViewers(v.Viewers)
+			{ "watching · " + itoa(int(v.Pixels)) + " pixels painted" }
+		</span>
+	</header>
+	<div id="board-grid" class="board-section__grid">
+		<sb-pixel-board id="board" size={ itoa(v.Size) } cells={ v.Cells } data-on:sb-paint={ paintExpr }></sb-pixel-board>
+		<div class="board-section__about">
+			<p><strong>Paint together.</strong> Everyone on this page shares one 48×48 board. Pick a colour and drag.</p>
+			<p class="muted">Faded pixels are still in flight. About 20 pixels per second each, so everybody gets a turn.</p>
+		</div>
+	</div>
+}
+
+// BoardViewers is the Showcase's viewer count.
+templ BoardViewers(n int) {
+	<span id="board-viewers">{ itoa(n) }</span>
 }

@@ -2,19 +2,25 @@
 name: Code Playground
 tag: sb-code-playground
 category: utilities
+unlisted: true
 summary: Edit a component's code and HTML side by side, with a live sandboxed preview.
 author: zweiundeins
 tags: [code, playground, sandbox, editor, preview, repl]
 since: 2026-09-21
 preview: |
   <sb-code-playground style="--sb-code-playground-height: 8.5rem; inline-size: 100%"><script type="text/plain" data-file="index.html"><sb-button variant="pixel">Hi!</sb-button></script></sb-code-playground>
+usage: |
+  <sb-code-playground runner="/your/runner.html">
+    <script type="text/plain" data-file="index.html"><p>Hello!</p></script>
+  </sb-code-playground>
 playground:
-  exclude: [deps, themes, runner, initial]
+  props: { delay: { min: 100, max: 5000, step: 100 } }
+  exclude: [deps, themes, runner, initial, autoRun, theme]
   content: <script type="text/plain" data-file="index.html"><p>Hello from the sandbox</p></script>
   style: "inline-size: 100%; --sb-code-playground-height: 18rem"
 ---
 
-A small code sandbox: file tabs with `sb-code-editor`, a live preview in a sandboxed iframe, a theme picker and a console. Every run gets a fresh document, because custom elements can't be redefined. The user code runs in an opaque origin, so it can't touch the host page's cookies, storage or DOM.
+A small code sandbox: file tabs with `sb-code-editor`, a live preview in a sandboxed iframe, a theme picker and a console. Every run gets a fresh iframe, because custom elements can't be redefined; it replaces the old one, so runs add no browser history and nothing from an earlier run keeps going. The user code runs in an opaque origin, so it can't touch the host page's cookies, storage or DOM.
 
 It needs `sb-code-editor` on the page and a **runner** page for the iframe. This site's runner lives at `/playground/run`. The protocol is below if you want to host your own.
 
@@ -46,9 +52,37 @@ Give it child `<script type="text/plain" data-file="…">` elements: `component.
 
 `deps` maps tags to module URLs to load in the preview. Tags that the edited code defines itself are skipped, so you can edit a component that its own demo also uses.
 
+### Your own things in the bar
+
+Elements with `slot="bar"` go into the top bar, between the file tabs and the run status. Declare the signals they read outside the playground: Rocket moves `data-signals` on a component's children into the component's own scope. `sb-change` (`detail.files`) tells you when the code changed, on every edit. The editors' own `change` and `sb-change` (`{ name, value }`) stay inside the playground. Starbase's `/playground` puts a live size line there: every edit (debounced) posts `component.js` to the server, which minifies and compresses it like the catalog's own modules.
+
+```html
+<sb-code-playground data-on:sb-change__debounce.400ms="@post('/size', {payload: {code: evt.detail.files['component.js']}})">
+  <span slot="bar" data-text="$_size"></span>
+</sb-code-playground>
+```
+
+### Problems
+
+`diagnostics` maps file names to lists of problems, `{"component.js": [{line, col, length, message, text}]}`, and hands each list to that file's editor (see sb-code-editor's [problems](/components/code-editor#problems)). Starbase's `/playground` fills it from a type check on the server: on every run (with Auto on, shortly after each edit), `component.ts`, or a `component.js` that starts with `// @ts-check`, goes to TypeScript, which checks it against the types of Datastar and Rocket.
+
+### TypeScript
+
+With `typescript`, the bar has a TypeScript switch: it renames `component.js` to `component.ts` (and back), keeping the code, and the editor highlights TypeScript. Initial files with a `component.ts` start with it on. The runner gets `component.ts` instead of `component.js`, so it has to turn it into JavaScript: Starbase's runner has the server strip the types and reports errors at the lines as written.
+
+```html
+<sb-code-playground data-signals:_diag="'{}'" data-attr:diagnostics="$_diag"
+  data-on:sb-change__debounce.400ms="@post('/check', {payload: {code: evt.detail.files['component.js']}})"></sb-code-playground>
+```
+
+## Properties and methods
+
+- `files`: the current files as `{ "component.js": "…", … }`. Setting it merges the given files over the current ones, updates the editors and runs. Starbase's "Save & share" reads it.
+- `run()`: run the current files, like the Run button.
+
 ## Runner protocol
 
-The iframe (`sandbox="allow-scripts"`) loads `runner` and exchanges `postMessage`s. Every message carries `source: "sb-runner"`.
+The iframe (`sandbox="allow-scripts allow-modals"`) loads `runner` and exchanges `postMessage`s. Every message carries `source: "sb-runner"`.
 
 | Direction | Message |
 |---|---|
@@ -56,8 +90,33 @@ The iframe (`sandbox="allow-scripts"`) loads `runner` and exchanges `postMessage
 | host → runner | `{type: "run", files, deps: [url], theme, base}` |
 | runner → host | `{type: "console", level, args}` · `{type: "error", message, line}` · `{type: "done"}` |
 
-The runner should import the edited `component.js` (for example from a `blob:` URL) **before** the dependencies, then `datastar`, and resolve `'datastar'` through an import map. A `blob:` module has no folder, so the runner resolves relative imports (`./vendor/lib.js`) against `base`, the `base` attribute as an absolute URL (empty when unset).
+The runner should import the edited `component.js` (for example from a `blob:` URL) **before** the dependencies, then `datastar`, and resolve `'datastar'` through an import map. With the TypeScript switch on, `files` holds `component.ts` instead. A `blob:` module has no folder, so the runner resolves relative imports (`./vendor/lib.js`) against `base`, the `base` attribute as an absolute URL (empty when unset).
+
+"Ran in … ms" is the time from `ready` to `done`. If a run has not sent `done` 5 s after its runner page loaded, the console says so: "No answer after 5 s: an endless loop?", or "The runner did not answer" when not even `ready` came. The next run replaces the frame, which stops it. This site's runner stops endless loops itself: every `while` and `for (…; …; …)` in `component.js` checks the time, and a task that spends a second in loops throws "Endless loop? Stopped after 1 s" (with the loop's line).
+
+## Styling
+
+Style it from your page's CSS, without changing the component or importing anything into it. Custom properties, inherited properties and `::part()` all reach into its shadow root.
+
+- **Size:** `--sb-code-playground-height` (default `34rem`) is the height of the whole playground. It fills the width it is given; the editor and the preview sit side by side, and stack below `48rem`.
+- **Fonts:** the toolbar uses your page's font. The console and the code use `--sb-font-ui` when a site sets one, else a monospace font.
+- **Colours:** the frame is `--sb-surface-card` with `--sb-border` lines; the selected file tab, the console and the theme picker are `--sb-surface-inset`. Text is `--sb-text-2` (`--sb-text-1` when active), the status `--sb-text-muted`. The Run button fills with `--sb-brand` (`--sb-brand-hover` on hover) and writes (and draws its triangle) in `--sb-text-on-brand`; focus rings are `--sb-brand-light`. Console errors are `--sb-danger`, warnings `--sb-warn`, and the preview's background is `--sb-bg`. Corners are `--sb-radius-lg`. The editors are `sb-code-editor`s, so their syntax colours (`--sb-code-tag`, `--sb-code-keyword`…) reach them too.
+- **Parts:** `playground` (the frame), `run`, `preview` (the iframe) and `console`. Your page's `::part()` rules win over the component's own, without `!important`.
+
+```html preview
+<style>
+  .my-playground { inline-size: 100%; --sb-code-playground-height: 16rem; --sb-code-tag: #DB2777; }
+  .my-playground::part(run) { background: #15803D; border-color: #15803D; color: #FFFFFF; }
+</style>
+<sb-code-playground class="my-playground">
+  <script type="text/plain" data-file="index.html">
+    <p>Hello from a smaller playground.</p>
+  </script>
+</sb-code-playground>
+```
+
+A font you load yourself works inside the component too: load it in the page (a `<link>`, or an `@import` at the very top of your main stylesheet). A component's own styles are a constructed stylesheet, which can't `@import`.
 
 ## Accessibility
 
-File tabs are real tabs, the editors are native textareas, the preview frame has a title, and the console is a `role="log"` live region. Ctrl/Cmd+Enter in an editor runs the code.
+File tabs are real tabs: one Tab stop, arrow keys, Home and End switch files, and each editor (a native textarea) is its tab panel. The preview frame has a title. The console is a `role="log"` live region, so output, errors and a run that does not answer are announced; the run status ("Ran in … ms") is not, so auto-runs while typing stay quiet. Ctrl/Cmd+Enter in an editor runs the code.

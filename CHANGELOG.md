@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- The docs' demo data (`/demo/data/rows`, `/children` and `/search`) goes out compressed: a data table's window is 8.1 KB instead of 44.9 KB. These answers bypassed lith's stream compression.
+
 ## [0.8.0] - 2026-10-14
 
 The server runs on [lith](https://lith.zweiundeins.gmbh): memory caps the live streams, every stream is compressed, and pages reconnect after a deploy. Every component also ships as one file, `sb-select` fits a toolbar, `sb-select`, `sb-dropdown` and `sb-date-picker` can be restyled to match it, and `--sb-notch: 0` turns every pixel detail smooth. Pages render faster, file storage shrinks to a third, and Go 1.27.2 closes three `net/http` vulnerabilities.

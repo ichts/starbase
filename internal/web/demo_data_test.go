@@ -48,6 +48,22 @@ func TestDemoDataEndpoints(t *testing.T) {
 	if !strings.Contains(string(b), "datastar-patch-signals") {
 		t.Errorf("a Datastar request got:\n%.200s", b)
 	}
+	// Patches go out compressed, like every stream: a data-table window is 45 KB raw.
+	for _, path := range []string{"/demo/data/rows?offset=0&count=200", "/demo/data/children?parent=mars", "/demo/data/search?q=orion"} {
+		req, _ = http.NewRequest("GET", ts.URL+path, nil)
+		req.Header.Set("Accept", "text/event-stream")
+		req.Header.Set("Accept-Encoding", "br, gzip")
+		req.Header.Set("Datastar-Request", "true")
+		res, err = c.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+		if res.Header.Get("Content-Encoding") == "" || res.Header.Get("Access-Control-Allow-Origin") != "*" {
+			t.Errorf("%s: Content-Encoding %q, ACAO %q", path, res.Header.Get("Content-Encoding"), res.Header.Get("Access-Control-Allow-Origin"))
+		}
+	}
 	if r, _ := get(t, c, ts.URL+"/demo/data/search?q=a&into=x.y"); r.StatusCode != 400 {
 		t.Errorf("a bad signal name = %d, want 400", r.StatusCode)
 	}

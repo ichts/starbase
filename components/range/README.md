@@ -90,4 +90,4 @@ Style it from your page's CSS, without changing the component or importing anyth
 
 ## Accessibility
 
-The field is a group named by its `label`. Each thumb is a native slider, announced as "<label> start" and "<label> end" with its value and unit (`aria-valuetext`). Without a `label` they are "Range start" and "Range end". The range shown next to the label is plain text, not a live region, so a step is announced once, by the thumb that moved. The focused thumb gets a ring inside its edge.
+The field is a group named by its `label`. Each thumb is a native slider, announced as "\<label> start" and "\<label> end" with its value and unit (`aria-valuetext`). Without a `label` they are "Range start" and "Range end". The range shown next to the label is plain text, not a live region, so a step is announced once, by the thumb that moved. The focused thumb gets a ring inside its edge.

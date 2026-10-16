@@ -11,8 +11,13 @@ All notable changes to this project are documented here. The format follows
 - `sb-data-table` columns the user resizes: with `resizable`, each header has a grip at its end to drag (the pointer is captured, the tracks follow once a frame) or double-click to fit, and Alt+ArrowRight or Alt+ArrowLeft on a header moves to its separator, where the arrows change the width by 8 px (32 with Shift), Home and End go to the minimum and the fit, and Escape puts the width back. `widths` (`{key: px}`) is view state like `hidden-columns`: a new map from the server wins, the same one keeps the user's, and `sb-column-widths {name, widths}` reports the whole map once per change, never during a drag. Per column, `resizable: false`, `min` and `fit` (the server's width for the whole result; without it the table measures the rows at hand). The column picker gets "Reset column widths". The docs' star catalog (`/demo/data/rows`) sends a `fit` per column from SQLite.
 - `sb-data-table`: a cell whose text is clipped shows all of it while it is pointed at or focused, over its neighbours, and a cell in the last column grows toward the start. The row keeps its height and the list its scroll size, so the virtual scroll's window stays put.
 
+### Changed
+
+- The data table's docs list the server code behind its fit widths again, so its page needs a 512 KiB compression window per tab: 120 MiB of stream memory now holds about 105 of its tabs with zstd and 65 in browsers without zstd (the largest page; smaller pages hold more).
+
 ### Fixed
 
+- `sb-range`'s docs show "<label> start" and "<label> end" as text instead of a stray, empty label.
 - `sb-data-table`'s header lines up with its rows when column widths are in `ch` or `em`: the header row was bold, and those units resolve in each row's own font (1 to 10 px of drift over seven `ch` columns in Pixelify Sans). Header text takes its font through `::part(column)`, never `::part(header)`; the README's styling example now does.
 - The docs' demo data (`/demo/data/rows`, `/children` and `/search`) goes out compressed: a data table's window is 8.1 KB instead of 44.9 KB. These answers bypassed lith's stream compression.
 

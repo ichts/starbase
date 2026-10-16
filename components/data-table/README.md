@@ -118,7 +118,55 @@ With `resizable`, each header has a grip at its end: drag it, or double-click it
 
 A new `widths` from the server wins, the same one again keeps the user's, and `el.widths` reads or sets the map without an event; a server that keeps it posts `sb-column-widths` as a command, like `sb-columns`. Widths go by key, so a hidden column has its width again when it shows.
 
-A fit never makes a column narrower than its header. A table that holds only a window can't measure the rest, so the server sends each column's `fit` for the whole result: here SQLite finds each column's longest value (`Reader.DemoStarLongest`), and `demoStarFits` (`internal/web/demo_data.go`) counts 8.4 px a character, JetBrains Mono's width at 14 px, plus the padding, unit and badge: exact in a monospace font, an estimate in others. Without `fit`, the table measures the rows at hand.
+A fit never makes a column narrower than its header. A table that holds only a window can't measure the rest, so the server sends each column's `fit` for the whole result. Here SQLite finds each column's longest value:
+
+```go source=internal/queries/demo_stars.go#Reader.DemoStarLongest
+// DemoStarLongest scans the catalog for its longest values.
+func (r *Reader) DemoStarLongest(ctx context.Context) (DemoStarLongest, error) {
+	var l DemoStarLongest
+	err := r.tx.QueryRowContext(ctx, `SELECT coalesce(max(length(name)), 0), coalesce(max(length(class)), 0), coalesce(max(length(constellation)), 0),
+		coalesce(max(distance), 0), coalesce(min(magnitude), 0), coalesce(max(magnitude), 0), coalesce(max(planets), 0) FROM demo_stars`).
+		Scan(&l.Name, &l.Class, &l.Constellation, &l.Distance, &l.MagnitudeMin, &l.MagnitudeMax, &l.Planets)
+	return l, err
+}
+```
+
+`demoStarFits` turns them into widths at 8.4 px a character, JetBrains Mono's width at 14 px, plus the padding, unit and badge: exact in a monospace font, an estimate in others.
+
+```go source=internal/web/demo_data.go#demoStarFits
+// demoStarFits are sb-data-table's fit widths for the catalog's columns, in
+// px: the most characters a column's values take as the table formats them
+// (numbers with grouping and up to three decimals), at 8.4 px each, plus the
+// cell's padding. The site's table text is JetBrains Mono at 14 px, whose
+// every character is 0.6 em wide, so this is exact there and an estimate in
+// other fonts. Rich cells add the distance's unit and the magnitude's badge.
+func demoStarFits(l queries.DemoStarLongest, rich bool) map[string]int {
+	const char, em, pad = 8.4, 14.0, 24 + 1
+	width := func(chars int, extra float64) int { return int(math.Ceil(float64(chars)*char+extra)) + pad }
+	number := func(v float64) int { // "-12,345.678"
+		n := len(strconv.Itoa(int(math.Abs(v))))
+		n += (n-1)/3 + 4
+		if v < 0 {
+			n++
+		}
+		return n
+	}
+	unit, badge := 0.0, 0.0
+	if rich {
+		unit, badge = 2*char+0.35*em, 0.8*em+2 // "ly" after a 0.35em margin; a badge's padding and border
+	}
+	return map[string]int{
+		"name":          width(l.Name, 0),
+		"class":         width(l.Class, 0),
+		"constellation": width(l.Constellation, 0),
+		"distance":      width(number(l.Distance), unit),
+		"magnitude":     width(max(number(l.MagnitudeMin), number(l.MagnitudeMax)), badge),
+		"planets":       width(len(strconv.Itoa(l.Planets)), 0),
+	}
+}
+```
+
+Without `fit`, the table measures the rows at hand.
 
 ## Server side
 

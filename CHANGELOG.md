@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `sb-data-table`: a cell whose text is clipped shows all of it while it is pointed at or focused, over its neighbours, and a cell in the last column grows toward the start. The row keeps its height and the list its scroll size, so the virtual scroll's window stays put.
+
 ### Fixed
 
 - `sb-data-table`'s header lines up with its rows when column widths are in `ch` or `em`: the header row was bold, and those units resolve in each row's own font (1 to 10 px of drift over seven `ch` columns in Pixelify Sans). Header text takes its font through `::part(column)`, never `::part(header)`; the README's styling example now does.

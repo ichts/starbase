@@ -95,6 +95,7 @@ const styles = /* css */ `
 	--_brand: var(--sb-brand, #8C6BFF);
 	--_focus: var(--sb-brand-light, #B09AFF);
 	--_muted: var(--sb-text-muted, #7785A8);
+	--_peek: color-mix(in oklab, var(--_text) 25%, transparent);
 	--_radius: var(--sb-radius, 8px);
 	--_notch: var(--sb-notch, 1);
 	--_n: calc(3px * var(--_notch));
@@ -193,7 +194,8 @@ const styles = /* css */ `
 .head { background: var(--_head); color: var(--_label); border-block-end: 1px solid var(--_border); }
 /* The weight goes on the cells: ch and em in --cols resolve in each row's own font. */
 .th { font-weight: 600; }
-.row { border-block-end: 1px solid var(--_line); background: var(--_bg); }
+/* A peeking cell overflows its row, which clips it, so the list's scroll size never changes. */
+.row { border-block-end: 1px solid var(--_line); background: var(--_bg); overflow-x: clip; }
 .row:hover { background-color: var(--_hover); }
 .row[aria-selected] { cursor: pointer; }
 .row[aria-selected="true"] { background-image: linear-gradient(var(--_sel) 0 0); box-shadow: inset 2px 0 var(--_brand); }
@@ -209,6 +211,20 @@ const styles = /* css */ `
 .th.sortable { padding: 0; }
 .th button { all: unset; box-sizing: border-box; display: flex; gap: 0.4rem; align-items: center; inline-size: 100%; padding-inline: 0.75rem; cursor: pointer; }
 .th button span { overflow: hidden; text-overflow: ellipsis; }
+/* A clipped cell (data-peek, set on hover and focus) shows its whole text over its neighbours. */
+.cell[data-peek]:is(:hover, :focus) {
+	inline-size: max-content;
+	min-inline-size: 100%;
+	overflow: visible;
+	z-index: 1;
+	background: var(--_hover);
+	box-shadow: 0.375rem 0 0.375rem -0.25rem var(--_peek);
+}
+.row[aria-selected="true"] > .cell[data-peek]:is(:hover, :focus) { background-image: linear-gradient(var(--_sel) 0 0); }
+.cell[data-peek]:is(:hover, :focus):dir(rtl) { box-shadow: -0.375rem 0 0.375rem -0.25rem var(--_peek); }
+/* The last column has nothing after it: it grows toward the start. */
+.cell[data-peek]:last-of-type:is(:hover, :focus) { justify-self: end; box-shadow: -0.375rem 0 0.375rem -0.25rem var(--_peek); }
+.cell[data-peek]:last-of-type:is(:hover, :focus):dir(rtl) { box-shadow: 0.375rem 0 0.375rem -0.25rem var(--_peek); }
 [data-align="center"] { text-align: center; }
 [data-align="end"] { text-align: end; }
 [data-align="center"] button { justify-content: center; }
@@ -260,6 +276,7 @@ const styles = /* css */ `
 	.columns:is(:hover, [aria-expanded="true"]) { forced-color-adjust: none; background: Highlight; color: HighlightText; outline-color: HighlightText; }
 	.option:not(:has(:disabled)):hover { outline: 1px solid Highlight; outline-offset: -1px; }
 	.row[aria-selected="true"] :is(.text, .suffix) { color: inherit; border-color: currentColor; }
+	.cell[data-peek]:is(:hover, :focus):not(:focus-visible) { outline: 1px solid CanvasText; outline-offset: -1px; }
 }
 `
 
@@ -548,11 +565,29 @@ rocket('sb-data-table', {
 			$$.hasFocus = true
 			const c = (evt!.target as Element).closest?.<HTMLElement>('[data-c]')
 			if (c) ($$.fr = +c.closest<HTMLElement>('[data-r]')!.dataset.r!), ($$.fc = +c.dataset.c!)
+			const was = focused
+			if ((focused = cellOf(evt!)) !== was) peekCell(focused, was)
+		})
+		// Only a clipped cell gets data-peek, while it is hovered or focused.
+		let hovered: HTMLElement | null = null, focused: HTMLElement | null = null
+		const peekCell = (cell: HTMLElement | null, was: HTMLElement | null) => {
+			if (was && was !== hovered && was !== focused) was.removeAttribute('data-peek')
+			if (cell && !cell.hasAttribute('data-peek') && cell.scrollWidth > cell.clientWidth) cell.setAttribute('data-peek', '')
+		}
+		const cellOf = (evt: Event) => (evt.target as Element).closest?.<HTMLElement>('.row .cell') ?? null
+		action('over', ({ evt }) => {
+			const was = hovered
+			if ((hovered = cellOf(evt!)) !== was) peekCell(hovered, was)
+		})
+		action('leave', () => {
+			const was = hovered
+			peekCell((hovered = null), was)
 		})
 		action('focusout', ({ evt }) => {
 			// A cell re-rendered away also "loses" focus, but that's not leaving
 			// (refocus picks it up): decide a frame later, when it is gone.
 			const t = evt!.target as Element
+			if (t === focused) peekCell((focused = null), t as HTMLElement)
 			requestAnimationFrame(() => t.isConnected && !$('.grid')?.contains(host.shadowRoot?.activeElement ?? null) && ($$.hasFocus = false))
 		})
 
@@ -687,7 +722,8 @@ rocket('sb-data-table', {
 			data-attr="{'item-size': $$h, buffer: $$buf, offset: $$off, total: $$tot, 'aria-label': $$label, 'aria-rowcount': $$n + 1, 'aria-multiselectable': $$mode === 'multiple' && 'true', 'aria-busy': $$loading && 'true'}"
 			data-style:--h="$$h + 'px'" data-style:--rows="$$n + 1" data-style:--cols="$$tpl"
 			data-on:sb-window="@window()" data-on:keydown="@key()" data-on:focusin="@focusin()" data-on:focusout="@focusout()"
-			data-on:click="@click()" data-on:auxclick="@aux()" data-on:dblclick="@activate()"></sb-virtual-scroll>
+			data-on:click="@click()" data-on:auxclick="@aux()" data-on:dblclick="@activate()"
+			data-on:pointerover="@over()" data-on:pointerleave="@leave()"></sb-virtual-scroll>
 		<!-- The header and the rows are rendered here and handed to the list (onFirstRender): a list
 		     upgraded before this template is scoped would take their $$ bindings for its own. -->
 		<div hidden data-ref:parts>

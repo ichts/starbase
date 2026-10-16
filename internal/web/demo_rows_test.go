@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"starbase/internal/commands"
 	"starbase/internal/demo"
@@ -64,9 +66,20 @@ func TestDemoRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var rich struct{ Rows []map[string]any }
+	var rich struct {
+		Rows []map[string]any
+		Fit  map[string]float64
+	}
 	json.NewDecoder(res.Body).Decode(&rich)
 	res.Body.Close()
+	// fit is for the whole catalog: every name of the window fits it, at 8.4 px a character and the padding.
+	longest := 0
+	for _, r := range rich.Rows {
+		longest = max(longest, utf8.RuneCountInString(r["name"].(map[string]any)["value"].(string)))
+	}
+	if f := rich.Fit; len(f) != 6 || f["name"] < math.Ceil(float64(longest)*8.4)+25 || f["distance"] <= f["planets"] || f["magnitude"] <= f["class"]-30 {
+		t.Errorf("fit %v (the window's longest name: %d characters)", f, longest)
+	}
 	badges, plain := 0, 0
 	for _, r := range rich.Rows {
 		name, _ := r["name"].(map[string]any)

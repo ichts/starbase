@@ -63,6 +63,10 @@ type Server struct {
 	exportLimitIP *limiter
 	exports       chan struct{} // the downloads streaming now, each holding a read connection
 
+	starsMu      sync.Mutex
+	starsLongest queries.DemoStarLongest // the star catalog's longest values (starLongest), for starsTotal stars
+	starsTotal   int
+
 	streamCap *streamCap // render streams per client
 	capWarn   quietWarn  // clients at their cap
 	roomWarn  quietWarn  // the streams' budget full: memory caps the streams

@@ -2,6 +2,7 @@ package web
 
 import (
 	"bufio"
+	"context"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
@@ -113,7 +114,8 @@ func (s *Server) demoSearch(w http.ResponseWriter, r *http.Request) {
 // demoRows answers a table's window and sort requests (sb-data-table's
 // sb-window and sb-sort) with ?count= stars from ?offset= (at most 500) in the
 // order asked for (?key=, ?dir=), and says which order it used. With
-// &cells=rich, the rows hold cell objects (demoStarCells).
+// &cells=rich, the rows hold cell objects (demoStarCells). fit is each
+// column's width for the whole catalog (demoStarFit).
 func (s *Server) demoRows(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	offset, _ := strconv.Atoi(q.Get("offset"))
@@ -137,7 +139,7 @@ func (s *Server) demoRows(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	window := map[string]any{"rows": stars, "offset": offset, "total": total, "sort": map[string]string{"key": key, "dir": dir}}
+	window := map[string]any{"rows": stars, "offset": offset, "total": total, "sort": map[string]string{"key": key, "dir": dir}, "fit": s.demoStarFit(r.Context(), total, q.Get("cells") == "rich")}
 	if q.Get("cells") == "rich" {
 		rows := make([]map[string]any, len(stars))
 		for i, st := range stars {
@@ -146,6 +148,56 @@ func (s *Server) demoRows(w http.ResponseWriter, r *http.Request) {
 		window["rows"] = rows
 	}
 	s.demoAnswer(w, r, "_rows", window, window)
+}
+
+// demoStarFit is demoStarFits for a catalog of total stars. The longest values
+// are scanned again only when its size changes (a scan of 100,000 stars takes
+// tens of milliseconds); after a failed scan the answer has no fit.
+func (s *Server) demoStarFit(ctx context.Context, total int, rich bool) map[string]int {
+	s.starsMu.Lock()
+	defer s.starsMu.Unlock()
+	if s.starsTotal != total || total == 0 {
+		l, err := s.q.ViewValue(ctx, func(rd *queries.Reader) (queries.DemoStarLongest, error) { return rd.DemoStarLongest(ctx) })
+		if err != nil {
+			if ctx.Err() == nil {
+				s.log.Error("demo star fit", "err", err)
+			}
+			return nil
+		}
+		s.starsLongest, s.starsTotal = l, total
+	}
+	return demoStarFits(s.starsLongest, rich)
+}
+
+// demoStarFits are sb-data-table's fit widths for the catalog's columns, in
+// px: the most characters a column's values take as the table formats them
+// (numbers with grouping and up to three decimals), at 8.4 px each, plus the
+// cell's padding. The site's table text is JetBrains Mono at 14 px, whose
+// every character is 0.6 em wide, so this is exact there and an estimate in
+// other fonts. Rich cells add the distance's unit and the magnitude's badge.
+func demoStarFits(l queries.DemoStarLongest, rich bool) map[string]int {
+	const char, em, pad = 8.4, 14.0, 24 + 1
+	width := func(chars int, extra float64) int { return int(math.Ceil(float64(chars)*char+extra)) + pad }
+	number := func(v float64) int { // "-12,345.678"
+		n := len(strconv.Itoa(int(math.Abs(v))))
+		n += (n-1)/3 + 4
+		if v < 0 {
+			n++
+		}
+		return n
+	}
+	unit, badge := 0.0, 0.0
+	if rich {
+		unit, badge = 2*char+0.35*em, 0.8*em+2 // "ly" after a 0.35em margin; a badge's padding and border
+	}
+	return map[string]int{
+		"name":          width(l.Name, 0),
+		"class":         width(l.Class, 0),
+		"constellation": width(l.Constellation, 0),
+		"distance":      width(number(l.Distance), unit),
+		"magnitude":     width(max(number(l.MagnitudeMin), number(l.MagnitudeMax)), badge),
+		"planets":       width(len(strconv.Itoa(l.Planets)), 0),
+	}
 }
 
 // demoStarCells is a star as sb-data-table's cell objects: the name links to

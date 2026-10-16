@@ -200,7 +200,7 @@ func (c *cdp) shot(raw json.RawMessage) (json.RawMessage, error) {
 	}
 	params := map[string]any{"format": "png", "captureBeyondViewport": true}
 	if p.Clip != nil {
-		p.Clip["scale"] = 2
+		p.Clip["scale"] = 1
 		params["clip"] = p.Clip
 	}
 	res, err := c.call(c.session, "Page.captureScreenshot", params)

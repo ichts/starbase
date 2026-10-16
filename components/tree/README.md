@@ -87,7 +87,15 @@ func (s *Server) demoAnswer(w http.ResponseWriter, r *http.Request, defaultSigna
 		http.Error(w, "into must be a signal name", http.StatusBadRequest)
 		return
 	}
-	datastar.NewSSE(w, r).MarshalAndPatchSignals(map[string]any{into: patch})
+	js, err := json.Marshal(map[string]any{into: patch})
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	// Through lith's sse, which compresses: the edge leaves text/event-stream to it.
+	if stream, err := sse.Open(w, r, sse.Options{}); err == nil {
+		stream.CloseWith(sse.PatchSignals(js, false))
+	}
 }
 ```
 

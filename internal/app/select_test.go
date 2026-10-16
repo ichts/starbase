@@ -21,6 +21,12 @@ func TestSelectMultiple(t *testing.T) {
 // STARBASE_DATASTAR_BUNDLE when that is set (see TestVirtualScrollFocus).
 func probeBundle(t *testing.T, path, script string, extra map[string]http.HandlerFunc) []byte {
 	t.Helper()
+	return probeBundleRun(t, path, script, extra, nil)
+}
+
+// probeBundleRun is probeBundle with probeRun's run.
+func probeBundleRun(t *testing.T, path, script string, extra map[string]http.HandlerFunc, run func(url string, results <-chan []byte) []byte) []byte {
+	t.Helper()
 	var bundle []byte
 	if p := os.Getenv("STARBASE_DATASTAR_BUNDLE"); p != "" {
 		var err error
@@ -43,7 +49,7 @@ func probeBundle(t *testing.T, path, script string, extra map[string]http.Handle
 		}
 		return m
 	}
-	_, body := probeWith(t, path, script, handlers)
+	_, body := probeRun(t, "", path, script, handlers, run)
 	if bundle != nil && served.Load() == 0 {
 		t.Error("the page did not load STARBASE_DATASTAR_BUNDLE")
 	}

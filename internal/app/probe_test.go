@@ -49,7 +49,17 @@ func probeWith(t *testing.T, path, script string, handlers func(app http.Handler
 // probeFull is probeAt with probeWith's handlers.
 func probeFull(t *testing.T, host, path, script string, handlers func(app http.Handler) map[string]http.HandlerFunc, chromeArgs ...string) (*app.App, []byte) {
 	t.Helper()
-	chrome := findChrome(t)
+	return probeRun(t, host, path, script, handlers, nil, chromeArgs...)
+}
+
+// probeRun is probeFull with run in place of runChrome (nil: runChrome), given the page's URL
+// and the channel of what the script posts.
+func probeRun(t *testing.T, host, path, script string, handlers func(app http.Handler) map[string]http.HandlerFunc, run func(url string, results <-chan []byte) []byte, chromeArgs ...string) (*app.App, []byte) {
+	t.Helper()
+	chrome := ""
+	if run == nil {
+		chrome = findChrome(t)
+	}
 	a, base, ln := startApp(t, host)
 	var extra map[string]http.HandlerFunc
 	if handlers != nil {
@@ -59,6 +69,9 @@ func probeFull(t *testing.T, host, path, script string, handlers func(app http.H
 	if host != "" {
 		// HttpsUpgrades would try https://<host> first.
 		chromeArgs = append([]string{"--host-resolver-rules=MAP " + host + " 127.0.0.1", "--disable-features=HttpsUpgrades"}, chromeArgs...)
+	}
+	if run != nil {
+		return a, run(base+path, results)
 	}
 	return a, runChrome(t, chrome, base+path, results, chromeArgs...)
 }

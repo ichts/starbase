@@ -190,7 +190,9 @@ const styles = /* css */ `
 	box-sizing: border-box;
 	block-size: var(--h);
 }
-.head { background: var(--_head); color: var(--_label); font-weight: 600; border-block-end: 1px solid var(--_border); }
+.head { background: var(--_head); color: var(--_label); border-block-end: 1px solid var(--_border); }
+/* The weight goes on the cells: ch and em in --cols resolve in each row's own font. */
+.th { font-weight: 600; }
 .row { border-block-end: 1px solid var(--_line); background: var(--_bg); }
 .row:hover { background-color: var(--_hover); }
 .row[aria-selected] { cursor: pointer; }
@@ -263,7 +265,7 @@ const styles = /* css */ `
 
 rocket('sb-data-table', {
 	props: ({ bool, json, number, oneOf, string }) => ({
-		columns: json.default(() => []).docs({ description: 'The columns: [{key, label?, width?, align?, sortable?}]. width is a CSS grid track (a number is px; default minmax(6rem, 1fr)); align is start, center or end. A row\'s value for a key is a scalar or a cell object {value, text?, suffix?, href?, tone?}.' }),
+		columns: json.default(() => []).docs({ description: 'The columns: [{key, label?, width?, align?, sortable?}]. width is a CSS grid track (a number is px; default minmax(6rem, 1fr)); ch and em resolve in each row\'s own font, so style header text through ::part(column), never ::part(header); align is start, center or end. A row\'s value for a key is a scalar or a cell object {value, text?, suffix?, href?, tone?}.' }),
 		rows: json.default(() => []).docs({ description: 'The rows at hand, objects keyed by column: all of them, or the window the server sent, starting at row offset. A value is a scalar, or a cell object {value, text, suffix, href, tone}: text replaces the formatted value, suffix follows it muted, href (http, https or mailto) makes it a link, tone (info, success, warning, danger, neutral) a badge. value is the sort key. Nothing is rendered as HTML.' }),
 		offset: number.min(0).docs({ description: 'Index of the first row in rows.' }),
 		total: number.min(0).docs({ description: 'How many rows there are (at least offset plus the rows given).' }),

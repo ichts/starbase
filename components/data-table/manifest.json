@@ -8,7 +8,7 @@
       "default": [],
       "required": false,
       "docs": {
-        "description": "The columns: [{key, label?, width?, align?, sortable?}]. width is a CSS grid track (a number is px; default minmax(6rem, 1fr)); align is start, center or end. A row's value for a key is a scalar or a cell object {value, text?, suffix?, href?, tone?}."
+        "description": "The columns: [{key, label?, width?, align?, sortable?}]. width is a CSS grid track (a number is px; default minmax(6rem, 1fr)); ch and em resolve in each row's own font, so style header text through ::part(column), never ::part(header); align is start, center or end. A row's value for a key is a scalar or a cell object {value, text?, suffix?, href?, tone?}."
       }
     },
     {

@@ -434,7 +434,7 @@ A new `selected` from the server always wins, and `selected="[]"` clears it. Mar
 
 ## Columns and rows
 
-- `columns`: `[{key, label?, width?, align?, sortable?}]`. `width` is a CSS grid track (`"8rem"`, `"minmax(4rem, 2fr)"`, a number for px; default `minmax(6rem, 1fr)`). Widths whose minimum is a length keep the columns steady while rows come and go; a table wider than its box scrolls sideways. `align` is `start`, `center` or `end`.
+- `columns`: `[{key, label?, width?, align?, sortable?}]`. `width` is a CSS grid track (`"8rem"`, `"minmax(4rem, 2fr)"`, a number for px; default `minmax(6rem, 1fr)`). Widths whose minimum is a length keep the columns steady while rows come and go; a table wider than its box scrolls sideways. The header and every row are grids of their own, so `ch` and `em` resolve in each row's font: give header text its font, size or weight through `::part(column)`, never `::part(header)`, or the header's columns drift away from the rows'. `align` is `start`, `center` or `end`.
 - `rows`: objects keyed by column. Numbers show in the reader's format (`4,242.5`), everything else as text. The field named by `row-key` (default `id`) identifies a row.
 - A value can also be a cell object, `{value, text?, suffix?, href?, tone?}`:
   - `value` is the raw value: the sort key, what `sb-cell-activate` reports, and the text when there is no `text` (formatted like a plain value).
@@ -463,12 +463,12 @@ Style it from your page's CSS, without changing the component or importing anyth
 - **Shadow:** `--sb-shadow-overlay` sets the column picker's drop shadow: one shadow without spread, such as `0 8px 16px rgb(0 0 0 / 0.3)`, or `none`.
 - **Toolbar:** it shows above the table with `column-picker`, or while a control you put in its slot shows (one with `hidden`, or hidden by `data-show`, doesn't count). The Columns button and its menu are `--sb-surface-raised` with a `--sb-border` frame and `--sb-text-2` text; checkboxes take `--sb-brand`. A `<button>` you put in the slot looks like the Columns button until your page styles it.
 - **Rich cells:** links are `--sb-brand-light` and underlined, suffixes `--sb-text-muted`. Badges take their tone from `--sb-info`, `--sb-ok`, `--sb-warn` and `--sb-danger` (`neutral` from `--sb-text-muted`), with a tinted background and border.
-- **Parts:** `grid` (the sb-virtual-scroll that scrolls), `header` (the header row), `column` (a header cell), `row` and `cell`. Selected rows are also `selected`, so `::part(row selected)` styles only those. In rows with cell objects, a cell holds a `text` (also `link` for a link, `badge` for a badge, so `::part(text badge)` styles only badges) and a `suffix`. Above the table: `toolbar`, `columns-button`, `columns-menu` (the popover) and `column-option` (a label with its checkbox). Your page's `::part()` rules win over the component's own, without `!important`.
+- **Parts:** `grid` (the sb-virtual-scroll that scrolls), `header` (the header row; its font sizes the `ch` and `em` of column widths, so set fonts on `column`), `column` (a header cell), `row` and `cell`. Selected rows are also `selected`, so `::part(row selected)` styles only those. In rows with cell objects, a cell holds a `text` (also `link` for a link, `badge` for a badge, so `::part(text badge)` styles only badges) and a `suffix`. Above the table: `toolbar`, `columns-button`, `columns-menu` (the popover) and `column-option` (a label with its checkbox). Your page's `::part()` rules win over the component's own, without `!important`.
 
 ```html preview
 <style>
   .my-table { --sb-brand: var(--sb-accent); }
-  .my-table::part(header) { text-transform: uppercase; font-size: 0.75rem; }
+  .my-table::part(column) { text-transform: uppercase; font-size: 0.75rem; }
   .my-table::part(row selected) { font-weight: 700; }
 </style>
 <sb-data-table class="my-table" label="Planets" selection="single" selected='["earth"]' row-height="40"

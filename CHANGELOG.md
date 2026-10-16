@@ -8,6 +8,7 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- `sb-data-table`'s header lines up with its rows when column widths are in `ch` or `em`: the header row was bold, and those units resolve in each row's own font (1 to 10 px of drift over seven `ch` columns in Pixelify Sans). Header text takes its font through `::part(column)`, never `::part(header)`; the README's styling example now does.
 - The docs' demo data (`/demo/data/rows`, `/children` and `/search`) goes out compressed: a data table's window is 8.1 KB instead of 44.9 KB. These answers bypassed lith's stream compression.
 
 ## [0.8.0] - 2026-10-14

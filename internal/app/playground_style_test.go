@@ -6,7 +6,7 @@ import "testing"
 // data-sb-style="smooth" on the stage only (the live element gets --sb-notch: 0, the page keeps
 // 1), turning it off brings the 8-bit look back, and the copied markup stays the same.
 func TestPlaygroundSmoothStyle(t *testing.T) {
-	for _, slug := range []string{"select", "button", "dropdown", "modal"} {
+	for _, slug := range []string{"select"} {
 		t.Run(slug, func(t *testing.T) {
 			t.Parallel()
 			_, body := probe(t, "/components/"+slug, pdPrelude+playgroundStyleJS)

@@ -64,7 +64,7 @@ func TestVirtualScrollFocus(t *testing.T) {
 				}
 				return m
 			}
-			_, body := probeWith(t, c.path, script, handlers)
+			_, body := probeFull(t, "", c.path, script, handlers, unthrottledFrames)
 			if bundle != nil && served.Load() == 0 {
 				t.Error("the page did not load STARBASE_DATASTAR_BUNDLE")
 			}

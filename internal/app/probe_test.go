@@ -135,6 +135,13 @@ func serveProbe(t *testing.T, ln net.Listener, path, script string, h http.Handl
 	return results
 }
 
+// unthrottledFrames lets a page's frames run as fast as it can paint them. Headless Chrome on macOS
+// has no display link to pace them (CVDisplayLinkCreateWithCGDisplay fails in its log) and falls
+// back to a timer of 11 to 20 fps, against the 60 of a headless Chrome on Linux. A test that counts
+// frames (settle, frames(4)) or races a timer against them then takes five times as long, or loses
+// the race: pass this to such a test, whose waits are on frames and conditions, not on time.
+const unthrottledFrames = "--disable-frame-rate-limit"
+
 func findChrome(t *testing.T) string {
 	t.Helper()
 	chrome := os.Getenv("CHROME")

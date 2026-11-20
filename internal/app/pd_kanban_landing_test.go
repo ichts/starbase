@@ -44,7 +44,7 @@ func TestKanbanBoardLanding(t *testing.T) {
 			},
 		}
 	}
-	_, body := probeWith(t, "/components/kanban-board", pdPrelude+kanbanLandingJS, handlers)
+	_, body := probeFull(t, "", "/components/kanban-board", pdPrelude+kanbanLandingJS, handlers, unthrottledFrames)
 	copyRows(t, body)
 }
 
@@ -64,6 +64,13 @@ try {
 	// Where the marker is placed: its own rect also moves while it flies in from the drop.
 	const slot = (m) => ({ left: parseFloat(m?.style.left), top: parseFloat(m?.style.top), width: parseFloat(m?.style.width), height: parseFloat(m?.style.height) })
 	const near = (a, b) => Math.abs(a - b) <= 1
+	// Until the marker is placed and nothing there moves: the gap a landing opens and the marker's flight
+	// from the drop are animations, and the marker follows its slot a frame at a time, so a fixed wait
+	// reads a slot that is still on its way when frames come slowly.
+	const calm = async () => {
+		await until(() => marker() && ![...board.getAnimations({ subtree: true }), ...marker().getAnimations()].some((a) => a.playState === 'running'))
+		await frames(3)
+	}
 	const end = (col) => { const r = lane(col).getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.bottom - 4 } }
 	const ends = []
 	board.addEventListener('sb-kanban-landing-end', (e) => ends.push(e.detail))
@@ -90,7 +97,7 @@ try {
 	check('the lane opens a gap', gaps(card('moon')), 1)
 
 	// Once the gap is open and nothing moves, a pending landing reads no layout.
-	await settle(300)
+	await calm()
 	let reads = 0
 	const measure = Element.prototype.getBoundingClientRect
 	Element.prototype.getBoundingClientRect = function () { reads++; return measure.call(this) }
@@ -141,12 +148,13 @@ try {
 	await answer('refuse')
 	await settle(300)
 
-	// The timeout.
-	board.setAttribute('data-kanban-landing-timeout', '300')
+	// The timeout runs from the drop, so it is long enough for the marker to show first, however slowly
+	// frames come.
+	board.setAttribute('data-kanban-landing-timeout', '1000')
 	await drag(card('neptune'), end(7))
-	await frames(4)
+	await until(marker)
 	check('a marker until the timeout', !!marker(), true)
-	await settle(500)
+	await until(() => !marker())
 	check('the timeout releases it', [!!marker(), ends.at(-1)], [false, { cardId: 'neptune', col: 7, reason: 'timeout' }])
 	await answer('refuse')
 	await settle(300)
@@ -157,7 +165,7 @@ try {
 	card('titan').focus()
 	press(card('titan'), 'ArrowRight', { altKey: true })
 	release('Alt')
-	await settle(250)
+	await calm()
 	check('a keyboard move gets a marker', [!!marker(), near(slot(marker()).top + slot(marker()).height + gap, rect(second).top), gaps(second)], [true, true, 1])
 	await answer()
 	await until(() => !marker())
@@ -179,7 +187,7 @@ try {
 	list4.style.cssText = 'max-block-size: 60px; overflow: auto'
 	const into = list4.querySelectorAll('[data-kanban-card]')[1].getBoundingClientRect()
 	await drag(card('moon'), { x: into.left + into.width / 2, y: into.top + 3 })
-	await settle(250)
+	await calm()
 	const top = slot(marker()).top
 	list4.scrollTop = 20
 	await frames(3)
